@@ -1,0 +1,52 @@
+[package]
+authors = ["Tracel Technologies Inc."]
+categories = ["development-tools"]
+description = "Burn Central core library for project management and code generation."
+keywords = ["tracel", "burn-central", "burn", "workspace", "library"]
+edition.workspace = true
+license.workspace = true
+name = "burn-central-workspace"
+readme = "README.md"
+repository = "https://github.com/tracel-ai/tracel/tree/main/crates/burn-central-workspace"
+version.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+once_cell.workspace = true
+syn.workspace = true
+quote.workspace = true
+proc-macro2.workspace = true
+syn-serde.workspace = true
+thiserror.workspace = true
+derive-new.workspace = true
+regex.workspace = true
+strum.workspace = true
+colored.workspace = true
+log.workspace = true
+chrono.workspace = true
+sha2.workspace = true
+toml_edit.workspace = true
+prettyplease.workspace = true
+cargo_metadata.workspace = true
+cargo-util-schemas.workspace = true
+flate2.workspace = true
+tar.workspace = true
+walkdir.workspace = true
+ignore.workspace = true
+gix.workspace = true
+unicase.workspace = true
+lazycell.workspace = true
+serde-untagged.workspace = true
+serde_ignored.workspace = true
+pathdiff.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+env_logger.workspace = true
+
+[features]
+default = []

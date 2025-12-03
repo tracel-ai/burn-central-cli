@@ -1,0 +1,11 @@
+**/*.rs.bk
+.DS_Store
+
+.dir-locals.el
+.idea
+.vscode
+.vs
+.fleet
+.ipynb_checkpoints/
+
+target/
