@@ -3,7 +3,6 @@ use clap::{Parser, Subcommand};
 use crate::app_config::Environment;
 use crate::commands;
 use crate::commands::default_command;
-use crate::config::Config;
 use crate::context::CliContext;
 use crate::tools::terminal::Terminal;
 
@@ -14,8 +13,12 @@ pub struct CliArgs {
     pub command: Option<Commands>,
 
     /// Use development environment (localhost:9001) with separate dev credentials
-    #[arg(long, action = clap::ArgAction::SetTrue, hide = true)]
+    #[arg(long, action = clap::ArgAction::SetTrue, hide = true, conflicts_with = "staging")]
     pub dev: bool,
+
+    /// Use staging environment (specify version: 1, 2, etc.)
+    #[arg(long, value_name = "VERSION", hide = true, conflicts_with = "dev")]
+    pub staging: Option<u8>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -40,14 +43,12 @@ pub enum Commands {
 pub fn cli_main() {
     let args = CliArgs::parse();
 
-    let environment = Environment::from_dev_flag(args.dev);
-
-    let config = Config {
-        api_endpoint: if args.dev {
-            "http://localhost:9001/".to_string()
-        } else {
-            "https://heat.tracel.ai/api/".to_string()
-        },
+    let environment = if args.dev {
+        Environment::Development
+    } else if let Some(version) = args.staging {
+        Environment::Staging(version)
+    } else {
+        Environment::Production
     };
 
     let terminal = Terminal::new();
@@ -57,7 +58,7 @@ pub fn cli_main() {
             .print_warning("Running in development mode - using local server and dev credentials");
     }
 
-    let context = CliContext::new(terminal.clone(), &config, environment).init();
+    let context = CliContext::new(terminal.clone(), environment).init();
 
     let cli_res = match args.command {
         Some(command) => handle_command(command, context),

@@ -13,7 +13,7 @@ pub fn handle_command(context: CliContext) -> anyhow::Result<()> {
         .unwrap();
 
     if confirm_value {
-        match ProjectContext::unlink(&project.get_manifest_path(), context.get_burn_dir_name()) {
+        match ProjectContext::unlink(&project.get_manifest_path(), &context.get_burn_dir_name()) {
             Ok(_) => context.terminal().finalize("Project unlinked successfully"),
             Err(e) => {
                 context

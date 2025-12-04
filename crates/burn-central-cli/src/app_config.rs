@@ -4,25 +4,18 @@ use std::{fs, io, path::PathBuf};
 
 use crate::context::Credentials;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Environment {
-    Production,
-    Development,
+pub use burn_central_client::Env as Environment;
+
+pub trait ToFileSuffix {
+    fn file_suffix(&self) -> Option<String>;
 }
 
-impl Environment {
-    pub fn from_dev_flag(is_dev: bool) -> Self {
-        if is_dev {
-            Self::Development
-        } else {
-            Self::Production
-        }
-    }
-
-    fn file_suffix(&self) -> &'static str {
+impl ToFileSuffix for Environment {
+    fn file_suffix(&self) -> Option<String> {
         match self {
-            Self::Production => "prod",
-            Self::Development => "dev",
+            Environment::Production => None,
+            Environment::Staging(version) => Some(format!("staging{}", version)),
+            Environment::Development => Some("dev".to_string()),
         }
     }
 }
@@ -57,7 +50,12 @@ impl AppConfig {
     }
 
     fn credentials_path(&self) -> PathBuf {
-        let filename = format!("credentials-{}.json", self.environment.file_suffix());
+        let filename = self
+            .environment
+            .file_suffix()
+            .map_or("credentials.json".to_string(), |suffix| {
+                format!("credentials-{}.json", suffix)
+            });
         self.base_dir.join(filename)
     }
 

@@ -35,6 +35,9 @@ pub fn get_client_and_login_if_needed(context: &mut CliContext) -> anyhow::Resul
                         }
                         let env_msg = match context.environment() {
                             Environment::Development => " (development environment)",
+                            Environment::Staging(version) => {
+                                &format!(" (staging environment v{})", version)
+                            }
                             Environment::Production => "",
                         };
                         context.terminal().print_err(&format!(
@@ -70,6 +73,7 @@ pub fn get_client_and_login_if_needed(context: &mut CliContext) -> anyhow::Resul
 pub fn prompt_login(context: &mut CliContext) -> anyhow::Result<String> {
     let env_msg = match context.environment() {
         Environment::Development => " for the development environment",
+        Environment::Staging(version) => &format!(" for the staging environment v{}", version),
         Environment::Production => "",
     };
 
@@ -88,6 +92,7 @@ pub fn handle_command(args: LoginArgs, mut context: CliContext) -> anyhow::Resul
         None => {
             let env_msg = match context.environment() {
                 Environment::Development => " (Development)",
+                Environment::Staging(_) => " (Staging)",
                 Environment::Production => "",
             };
             context
@@ -114,6 +119,7 @@ pub fn handle_command(args: LoginArgs, mut context: CliContext) -> anyhow::Resul
     if let Ok(user) = user {
         let env_msg = match context.environment() {
             Environment::Development => " to the development environment",
+            Environment::Staging(_) => " to the staging environment",
             Environment::Production => "",
         };
         context.terminal().finalize(&format!(

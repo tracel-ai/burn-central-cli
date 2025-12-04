@@ -21,14 +21,14 @@ pub fn is_burn_central_project_linked(context: &CliContext) -> bool {
     let manifest_path = find_manifest();
     match manifest_path {
         Err(_) => false,
-        Ok(p) => ProjectContext::load(&p, context.get_burn_dir_name()).is_ok(),
+        Ok(p) => ProjectContext::load(&p, &context.get_burn_dir_name()).is_ok(),
     }
 }
 
 /// Require a linked Burn Central project, showing helpful errors if not found
 pub fn require_linked_project(context: &CliContext) -> anyhow::Result<ProjectContext> {
     let manifest_path = find_manifest()?;
-    match ProjectContext::load(&manifest_path, context.get_burn_dir_name()) {
+    match ProjectContext::load(&manifest_path, &context.get_burn_dir_name()) {
         Ok(project) => Ok(project),
         Err(_) => {
             if is_rust_project() {
