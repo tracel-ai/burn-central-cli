@@ -15,7 +15,7 @@ rust-version = "1.87.0"
 authors = ["Tracel Technologies Inc."]
 repository = "https://github.com/tracel-ai/burn-central-cli"
 keywords = ["tracel", "burn-central", "burn", "cli"]
-categories = ["Command-line interface", "Development tools"]
+categories = ["command-line-interface", "development-tools"]
 
 [workspace.dependencies]
 anyhow = "1.0.98"
