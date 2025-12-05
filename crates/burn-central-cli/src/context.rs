@@ -75,7 +75,7 @@ impl CliContext {
     }
 
     pub fn get_frontend_endpoint(&self) -> url::Url {
-        // We can't know easily the url depending on the environnement, so let's just serve
+        // We can't know easily the url depending on the environment, so let's just serve
         // production url
         Url::parse("https://central.burn.dev/").expect("Frontend endpoint should be valid")
     }
