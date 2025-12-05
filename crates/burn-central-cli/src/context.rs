@@ -1,8 +1,8 @@
-use crate::app_config::{AppConfig, Environment};
-use crate::config::Config;
+use crate::app_config::{AppConfig, Environment, ToFileSuffix};
 use crate::tools::terminal::Terminal;
 use burn_central_client::{BurnCentralCredentials, Client};
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Credentials {
@@ -23,19 +23,14 @@ pub enum ClientCreationError {
 pub struct CliContext {
     terminal: Terminal,
     environment: Environment,
-    api_endpoint: url::Url,
     creds: Option<Credentials>,
 }
 
 impl CliContext {
-    pub fn new(terminal: Terminal, config: &Config, environment: Environment) -> Self {
+    pub fn new(terminal: Terminal, environment: Environment) -> Self {
         Self {
             terminal,
             environment,
-            api_endpoint: config
-                .api_endpoint
-                .parse::<url::Url>()
-                .expect("API endpoint should be valid"),
             creds: None,
         }
     }
@@ -68,7 +63,7 @@ impl CliContext {
             .ok_or(ClientCreationError::NoCredentials)?;
 
         let creds = BurnCentralCredentials::new(api_key.to_owned());
-        let client = Client::new(self.api_endpoint.clone(), &creds);
+        let client = Client::new(self.environment.clone(), &creds);
 
         client.map_err(|e| {
             if e.is_login_error() {
@@ -79,23 +74,10 @@ impl CliContext {
         })
     }
 
-    pub fn get_api_endpoint(&self) -> &url::Url {
-        &self.api_endpoint
-    }
-
     pub fn get_frontend_endpoint(&self) -> url::Url {
-        let host = self
-            .api_endpoint
-            .host_str()
-            .expect("API endpoint should have a host");
-
-        let mut host_url =
-            url::Url::parse("https://example.com").expect("Base URL should be valid");
-        host_url.set_host(Some(host)).expect("Host should be valid");
-        host_url
-            .set_scheme(self.api_endpoint.scheme())
-            .expect("Scheme should be valid");
-        host_url
+        // We can't know easily the url depending on the environment, so let's just serve
+        // production url
+        Url::parse("https://central.burn.dev/").expect("Frontend endpoint should be valid")
     }
 
     pub fn terminal(&self) -> &Terminal {
@@ -103,13 +85,16 @@ impl CliContext {
     }
 
     pub fn environment(&self) -> Environment {
-        self.environment
+        self.environment.clone()
     }
 
-    pub fn get_burn_dir_name(&self) -> &str {
-        match self.environment {
-            Environment::Development => ".burn-dev",
-            Environment::Production => ".burn",
-        }
+    pub fn get_api_endpoint(&self) -> String {
+        self.environment.get_url().to_string()
+    }
+
+    pub fn get_burn_dir_name(&self) -> String {
+        self.environment()
+            .file_suffix()
+            .map_or(".burn".to_string(), |suffix| format!(".burn-{}", suffix))
     }
 }

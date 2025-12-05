@@ -34,16 +34,14 @@ pub fn handle_command(mut context: CliContext) -> anyhow::Result<()> {
         .print(&format!("Namespace: {}", user.namespace));
 
     let env_name = match context.environment() {
-        Environment::Development => "Development (localhost)",
-        Environment::Production => "Production (heat.tracel.ai)",
+        Environment::Development => &format!("Development ({})", context.get_api_endpoint()),
+        Environment::Staging(_) => &format!("Staging ({})", context.get_api_endpoint()),
+        Environment::Production => &format!("Production ({})", context.get_api_endpoint()),
     };
+
     context
         .terminal()
         .print(&format!("Environment: {}", env_name));
-    context
-        .terminal()
-        .print(&format!("API Endpoint: {}", context.get_api_endpoint()));
-
     context
         .terminal()
         .finalize("User information retrieved successfully.");
