@@ -63,7 +63,7 @@ impl CliContext {
             .ok_or(ClientCreationError::NoCredentials)?;
 
         let creds = BurnCentralCredentials::new(api_key.to_owned());
-        let client = Client::new(&self.environment, &creds);
+        let client = Client::new(self.environment.clone(), &creds);
 
         client.map_err(|e| {
             if e.is_login_error() {
