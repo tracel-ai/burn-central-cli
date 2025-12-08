@@ -1,7 +1,6 @@
 use anyhow::Context;
 use burn_central_workspace::ProjectContext;
 use burn_central_workspace::compute_provider::ComputeProviderJobArgs;
-use burn_central_workspace::compute_provider::ProcedureTypeArg;
 use burn_central_workspace::execution::BackendType;
 use burn_central_workspace::execution::ProcedureType;
 use burn_central_workspace::execution::local::{LocalExecutionConfig, LocalExecutor};
@@ -134,9 +133,7 @@ fn execute_remotely(
             .get_api_key()
             .context("No API key available")?
             .to_string(),
-        procedure_type: ProcedureTypeArg {
-            procedure_type: ProcedureType::Training,
-        },
+        procedure_type: ProcedureType::Training,
         api_endpoint: context.get_api_endpoint().to_string(),
     };
 
