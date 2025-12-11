@@ -238,7 +238,6 @@ fn generate_main_rs(
         #backend_types
 
         use #crate_name_str::*;
-        use burn::prelude::*;
 
         fn main() -> Result<(), String> {
             use burn_central::runtime::Executor;
@@ -258,7 +257,8 @@ fn generate_main_rs(
                 .build()
                 .map_err(|e| e.to_string())?;
 
-            let project_path = burn_central::schemas::ProjectPath::try_from(format!("{}/{}", namespace, project))
+            // Check whether the project path is valid
+            burn_central::schemas::ProjectPath::try_from(format!("{}/{}", namespace, project))
                 .expect("Project path should be valid");
 
             let mut #builder_ident = Executor::<MyAutodiffBackend>::builder();
