@@ -257,9 +257,6 @@ fn generate_main_rs(
                 .build()
                 .map_err(|e| e.to_string())?;
 
-            // Check whether the project path is valid
-            burn_central::schemas::ProjectPath::try_from(format!("{}/{}", namespace, project))
-                .expect("Project path should be valid");
 
             let mut #builder_ident = Executor::<MyAutodiffBackend>::builder();
             #(#builder_registration)*
