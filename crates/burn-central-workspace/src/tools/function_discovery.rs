@@ -31,6 +31,15 @@ impl FunctionMetadata {
                 self.fn_name
             )
         } else {
+            // Try to decode as UTF-8 string first (new format with original source)
+            if let Ok(source_code) = std::str::from_utf8(&self.token_stream) {
+                // Check if it looks like Rust source code (not JSON)
+                if !source_code.trim_start().starts_with('{') {
+                    return source_code.to_string();
+                }
+            }
+
+            // Fall back to JSON AST deserialization (old format)
             match syn_serde::json::from_slice::<syn::ItemFn>(&self.token_stream) {
                 Ok(itemfn) => match syn::parse2(itemfn.into_token_stream()) {
                     Ok(syn_tree) => prettyplease::unparse(&syn_tree),
@@ -147,6 +156,14 @@ pub fn parse_expanded_output(expanded: &str) -> Vec<FunctionMetadata> {
             break;
         }
     }
+
+    for meta in &mut out {
+        let result = extract_ast_token_stream(expanded, &meta.fn_name);
+        if let Some(token_stream) = result {
+            meta.token_stream = token_stream;
+        }
+    }
+
     out
 }
 
@@ -190,6 +207,82 @@ fn find(hay: &[u8], needle: &[u8], mut from: usize) -> Option<usize> {
     None
 }
 
+/// Unescape a Rust byte string literal (without the surrounding b"...")
+/// Handles common escape sequences: \", \\, \n, \r, \t
+fn unescape_byte_string(escaped: &str) -> Vec<u8> {
+    let mut result = Vec::new();
+    let mut chars = escaped.chars();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            // Handle escape sequences
+            if let Some(next) = chars.next() {
+                match next {
+                    '"' => result.push(b'"'),
+                    '\\' => result.push(b'\\'),
+                    'n' => result.push(b'\n'),
+                    'r' => result.push(b'\r'),
+                    't' => result.push(b'\t'),
+                    // For any other escape, just include it as-is
+                    _ => {
+                        result.push(b'\\');
+                        result.extend(next.to_string().as_bytes());
+                    }
+                }
+            } else {
+                // Trailing backslash
+                result.push(b'\\');
+            }
+        } else {
+            // Regular character - convert to bytes
+            result.extend(ch.to_string().as_bytes());
+        }
+    }
+
+    result
+}
+
+/// Extract the JSON AST from a _BURN_FUNCTION_AST_* constant
+/// Pattern: const _BURN_FUNCTION_AST_NAME: &[u8] = b"{...json...}";
+fn extract_ast_token_stream(expanded: &str, fn_name: &str) -> Option<Vec<u8>> {
+    // Derive the AST constant name from the function name
+    let ast_const_name = format!("_BURN_FUNCTION_AST_{}", fn_name.to_uppercase());
+
+    // Search for the constant declaration
+    let const_pattern = format!("const {}: &[u8]", ast_const_name);
+    let const_pos = expanded.find(&const_pattern)?;
+
+    // Find the `b"` after the constant declaration (allowing for whitespace/newlines between = and b")
+    let search_start = const_pos + const_pattern.len();
+    let b_quote_pattern = "b\"";
+    let b_quote_pos = expanded[search_start..].find(b_quote_pattern)?;
+    let content_start = search_start + b_quote_pos + b_quote_pattern.len();
+
+    // Find the closing `";`
+    let chars: Vec<char> = expanded[content_start..].chars().collect();
+    let mut pos = 0;
+
+    while pos < chars.len() {
+        if chars[pos] == '\\' && pos + 1 < chars.len() {
+            // Skip the escaped character
+            pos += 2;
+        } else if chars[pos] == '"' {
+            // Found the closing quote
+            // Check if it's followed by `;`
+            if pos + 1 < chars.len() && chars[pos + 1] == ';' {
+                let escaped_content: String = chars[..pos].iter().collect();
+                return Some(unescape_byte_string(&escaped_content));
+            } else {
+                pos += 1;
+            }
+        } else {
+            pos += 1;
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,5 +315,132 @@ mod tests {
         let ok = "BCFN1|a::b::c::d|f|__builder|r|training|END";
         let m = parse_bcfn_marker(ok).unwrap();
         assert_eq!(m.mod_path, "a::b::c::d");
+    }
+
+    #[test]
+    fn unescapes_byte_string() {
+        let escaped = r#"hello \"world\" with \\backslash\\ and \n newline"#;
+        let result = unescape_byte_string(escaped);
+        let expected = b"hello \"world\" with \\backslash\\ and \n newline";
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn extracts_ast_token_stream() {
+        let expanded = r#"
+            const _: () = {
+                const BURN_CENTRAL_FUNCTION_TEST: &str = "BCFN1|my::module|test|__test_builder|test|training|END";
+                const _BURN_FUNCTION_AST_TEST: &[u8] = b"{\"vis\":\"pub\",\"ident\":\"test\"}";
+            };
+        "#;
+
+        let token_stream = extract_ast_token_stream(expanded, "test").unwrap();
+        let expected = b"{\"vis\":\"pub\",\"ident\":\"test\"}";
+        assert_eq!(token_stream, expected);
+    }
+
+    #[test]
+    fn parses_markers_with_ast() {
+        let expanded = r#"
+            const _: () = {
+                const BURN_CENTRAL_FUNCTION_TRAIN:&str="BCFN1|my::module|train_fn|__train_fn_builder|train|training|END";
+                const _BURN_FUNCTION_AST_TRAIN_FN: &[u8] = b"{\"vis\":\"pub\",\"ident\":\"train_fn\"}";
+            };
+            const _: () = {
+                const BURN_CENTRAL_FUNCTION_EVAL:&str="BCFN1|my::module|eval_fn|__eval_fn_builder|evaluate|training|END";
+                const _BURN_FUNCTION_AST_EVAL_FN: &[u8] = b"{\"vis\":\"pub\",\"ident\":\"eval_fn\"}";
+            };
+        "#;
+
+        let v = parse_expanded_output(expanded);
+        assert_eq!(v.len(), 2);
+
+        // Verify metadata
+        assert_eq!(v[0].mod_path, "my::module");
+        assert_eq!(v[0].fn_name, "train_fn");
+
+        // Verify token streams are populated
+        assert!(!v[0].token_stream.is_empty());
+        assert!(!v[1].token_stream.is_empty());
+
+        // Verify token stream content
+        let expected_train = b"{\"vis\":\"pub\",\"ident\":\"train_fn\"}";
+        let expected_eval = b"{\"vis\":\"pub\",\"ident\":\"eval_fn\"}";
+        assert_eq!(v[0].token_stream, expected_train);
+        assert_eq!(v[1].token_stream, expected_eval);
+    }
+
+    #[test]
+    fn handles_missing_ast_gracefully() {
+        let expanded = r#"
+            const BURN_CENTRAL_FUNCTION_TRAIN:&str="BCFN1|my::module|train_fn|__train_fn_builder|train|training|END";
+        "#;
+
+        let v = parse_expanded_output(expanded);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].fn_name, "train_fn");
+        // Token stream should be empty when AST constant is missing
+        assert!(v[0].token_stream.is_empty());
+    }
+
+    #[test]
+    fn extracts_ast_with_newlines() {
+        // This is the actual format from the macro expansion
+        let expanded = r#"
+            #[allow(dead_code)]
+            const BURN_CENTRAL_FUNCTION_TRAINING: &str =
+                "BCFN1|mnist_heat::training|training|__training_builder|mnist|training|END";
+            #[allow(dead_code)]
+            const _BURN_FUNCTION_AST_TRAINING: &[u8] =
+                b"{\"vis\":\"pub\",\"ident\":\"training\"}";
+        "#;
+
+        let token_stream = extract_ast_token_stream(expanded, "training").unwrap();
+        let expected = b"{\"vis\":\"pub\",\"ident\":\"training\"}";
+        assert_eq!(token_stream, expected);
+    }
+
+    #[test]
+    fn extracts_real_world_ast() {
+        // This is the actual full format from the mnist project
+        let expanded = r#"
+            #[allow(dead_code)]
+            const BURN_CENTRAL_FUNCTION_TRAINING: &str =
+                "BCFN1|mnist_heat::training|training|__training_builder|mnist|training|END";
+            #[allow(dead_code)]
+            const _BURN_FUNCTION_AST_TRAINING: &[u8] =
+                b"{\"vis\":\"pub\",\"ident\":\"training\",\"generics\":{\"params\":[{\"type\":{\"ident\":\"B\",\"colon_token\":true,\"bounds\":[{\"trait\":{\"path\":{\"segments\":[{\"ident\":\"AutodiffBackend\"}]}}}]}}]},\"inputs\":[{\"typed\":{\"pat\":{\"ident\":{\"ident\":\"client\"}},\"ty\":{\"reference\":{\"elem\":{\"path\":{\"segments\":[{\"ident\":\"ExperimentRun\"}]}}}}}},{\"typed\":{\"pat\":{\"ident\":{\"ident\":\"config\"}},\"ty\":{\"path\":{\"segments\":[{\"ident\":\"Args\",\"arguments\":{\"angle_bracketed\":{\"args\":[{\"type\":{\"path\":{\"segments\":[{\"ident\":\"ExperimentConfig\"}]}}}]}}}]}}}}],\"output\":{\"path\":{\"segments\":[{\"ident\":\"Result\"}]}}}";
+        "#;
+
+        let token_stream = extract_ast_token_stream(expanded, "training").unwrap();
+
+        // Verify it starts with the expected JSON structure
+        let json_str = std::str::from_utf8(&token_stream).unwrap();
+        assert!(json_str.starts_with("{\"vis\":\"pub\",\"ident\":\"training\""));
+        assert!(json_str.contains("\"ident\":\"AutodiffBackend\""));
+        assert!(json_str.contains("\"ident\":\"client\""));
+        assert!(json_str.contains("\"ident\":\"config\""));
+
+        // Verify it's valid JSON by attempting to parse it
+        let _: serde_json::Value =
+            serde_json::from_slice(&token_stream).expect("Token stream should be valid JSON");
+    }
+
+    #[test]
+    fn get_function_code_returns_source_with_comments() {
+        let meta = FunctionMetadata {
+            mod_path: "my::module".to_string(),
+            fn_name: "test".to_string(),
+            builder_fn_name: "__test_builder".to_string(),
+            routine_name: "test".to_string(),
+            proc_type: "training".to_string(),
+            token_stream: "pub fn test() {\n    // Important comment\n    let value = 42;\n}"
+                .as_bytes()
+                .to_vec(),
+        };
+
+        let code = meta.get_function_code();
+        assert!(code.contains("// Important comment"));
+        assert!(code.contains("let value = 42;"));
     }
 }
