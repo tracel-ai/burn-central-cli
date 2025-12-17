@@ -186,7 +186,7 @@ impl ProjectContext {
         burn_dir.init().map_err(|e| {
             ProjectContextError::new(
                 "Failed to initialize Burn directory".to_string(),
-                ErrorKind::BurnDirNotInitialized,
+                ErrorKind::BurnDirInitialization,
                 Some(e.into()),
             )
         })?;
