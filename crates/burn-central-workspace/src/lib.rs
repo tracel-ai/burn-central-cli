@@ -7,6 +7,6 @@ pub mod tools;
 
 pub use entity::projects::burn_dir::project::BurnCentralProject;
 pub use entity::projects::project_path::ProjectPath;
-pub use entity::projects::{CrateInfo, ProjectContext};
+pub use entity::projects::{CrateInfo, ErrorKind, ProjectContext, ProjectContextError};
 
 pub type Result<T> = anyhow::Result<T>;
