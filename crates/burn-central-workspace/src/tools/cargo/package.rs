@@ -2,7 +2,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
-    io::Seek,
+    io::{Seek, stdin},
     path::{Path, PathBuf},
 };
 
@@ -201,6 +201,10 @@ pub fn package(artifacts_dir: &Path, target_package_name: &str) -> anyhow::Resul
     print_info!("{}", "Archiving project".green().bold());
 
     let mut package_cmd = std::process::Command::new("cargo");
+    package_cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::piped());
     package_cmd
         .arg("package")
         .arg("-Zpackage-workspace")

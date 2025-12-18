@@ -3,13 +3,25 @@ use burn_central_workspace::ProjectContext;
 use burn_central_workspace::compute_provider::ComputeProviderJobArgs;
 use burn_central_workspace::execution::BackendType;
 use burn_central_workspace::execution::ProcedureType;
-use burn_central_workspace::execution::local::{LocalExecutionConfig, LocalExecutor};
+use burn_central_workspace::execution::local::ExecutionEvent;
+use burn_central_workspace::execution::local::ExecutionEventReporter;
+use burn_central_workspace::execution::local::LocalExecutionConfig;
+use burn_central_workspace::execution::local::LocalExecutor;
 use clap::Parser;
 use clap::ValueHint;
+use cliclack::{MultiProgress, ProgressBar};
 use colored::Colorize;
+
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::commands::package::package_sequence;
 use crate::helpers::require_linked_project;
+
+use crate::tools::terminal::Terminal;
 use crate::{context::CliContext, tools::terminal::BURN_ORANGE};
 
 /// Parse a key=value string into a key-value pair
@@ -171,6 +183,124 @@ fn preload_functions(context: &CliContext, project: &ProjectContext) -> anyhow::
     Ok(())
 }
 
+struct TrainingReporter {
+    multi_progress: MultiProgress,
+    main_progress: ProgressBar,
+    step_start_time: Mutex<Option<Instant>>,
+    current_step: Mutex<Option<String>>,
+    current_message: Mutex<String>,
+    timer_active: AtomicBool,
+}
+
+impl TrainingReporter {
+    pub fn new(terminal: Terminal) -> Self {
+        let multi_progress = terminal.multiprogress("Training Progress");
+        let main_progress = multi_progress.add(terminal.spinner());
+
+        Self {
+            multi_progress,
+            main_progress,
+            step_start_time: Mutex::new(None),
+            current_step: Mutex::new(None),
+            current_message: Mutex::new("Processing...".to_string()),
+            timer_active: AtomicBool::new(true),
+        }
+    }
+
+    fn add_to_history(&self, message: String) {
+        self.multi_progress
+            .println(format!("  {}", message.dimmed()));
+    }
+
+    pub fn update_spinner_display(&self) {
+        let current_step = self.current_step.lock().unwrap();
+        let current_message = self.current_message.lock().unwrap();
+        let step_start_time = self.step_start_time.lock().unwrap();
+
+        if let (Some(step), Some(start_time)) = (current_step.as_ref(), *step_start_time) {
+            let elapsed_time = crate::tools::time::format_elapsed_time(start_time.elapsed());
+
+            self.main_progress.set_message(format!(
+                "{} {} [{}]",
+                step.custom_color(BURN_ORANGE).bold(),
+                current_message.trim(),
+                elapsed_time.dimmed()
+            ));
+        }
+    }
+
+    pub fn start(&self, message: String) {
+        self.main_progress.start(message);
+    }
+
+    pub fn stop(&self, message: String) {
+        self.timer_active.store(false, Ordering::Relaxed);
+        self.flush_active_step();
+        self.main_progress.stop(message);
+        self.multi_progress.stop();
+    }
+
+    pub fn error(&self, message: String) {
+        self.timer_active.store(false, Ordering::Relaxed);
+        self.flush_active_step();
+        self.main_progress.clear();
+        self.multi_progress.error(message);
+    }
+
+    fn flush_active_step(&self) {
+        let current_step = self.current_step.lock().unwrap();
+        let current_message = self.current_message.lock().unwrap();
+
+        if let Some(step) = current_step.as_ref() {
+            if !current_message.trim().is_empty() && current_message.trim() != "Processing..." {
+                let history_msg = format!("{} - {}", step, current_message.trim());
+                self.add_to_history(history_msg);
+            }
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.timer_active.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for TrainingReporter {
+    fn drop(&mut self) {
+        self.timer_active.store(false, Ordering::Relaxed);
+    }
+}
+
+impl ExecutionEventReporter for TrainingReporter {
+    fn report_event(&self, event: ExecutionEvent) {
+        let message = event.message.unwrap_or_else(|| "Processing...".to_string());
+
+        let mut current_step = self.current_step.lock().unwrap();
+        let mut step_start_time = self.step_start_time.lock().unwrap();
+
+        let is_new_step = current_step.as_ref() != Some(&event.step);
+
+        if is_new_step {
+            drop(current_step);
+            drop(step_start_time);
+            self.flush_active_step();
+
+            current_step = self.current_step.lock().unwrap();
+            step_start_time = self.step_start_time.lock().unwrap();
+
+            *current_step = Some(event.step.clone());
+            *step_start_time = Some(Instant::now());
+        }
+
+        // Update current message
+        *self.current_message.lock().unwrap() = message;
+
+        drop(current_step);
+        drop(step_start_time);
+
+        self.update_spinner_display();
+    }
+}
+
 fn execute_locally(
     args: TrainingArgs,
     context: &CliContext,
@@ -202,15 +332,28 @@ fn execute_locally(
     )
     .with_args(args_json.data);
 
-    let spinner = context.terminal().spinner();
-    spinner.start(format!(
+    let reporter = Arc::new(TrainingReporter::new(context.terminal().clone()));
+    reporter.start(format!(
         "Running training function `{}`...",
         function.custom_color(BURN_ORANGE).bold()
     ));
-    let result = executor.execute(config)?;
+
+    thread::spawn({
+        let reporter = reporter.clone();
+        move || {
+            while reporter.is_active() {
+                thread::sleep(Duration::from_millis(1000));
+                if reporter.is_active() {
+                    reporter.update_spinner_display();
+                }
+            }
+        }
+    });
+
+    let result = executor.execute(config, Some(reporter.clone()))?;
 
     if result.success {
-        spinner.stop(format!(
+        reporter.stop(format!(
             "Training function `{}` executed successfully.",
             function.custom_color(BURN_ORANGE).bold()
         ));
@@ -221,7 +364,7 @@ fn execute_locally(
             .terminal()
             .finalize("Training completed successfully.");
     } else {
-        spinner.error("Training function execution failed.");
+        reporter.error("Training function execution failed.".to_string());
 
         if let Some(error) = result.error {
             context.terminal().print_err(&format!("Error:\n{}", error));
