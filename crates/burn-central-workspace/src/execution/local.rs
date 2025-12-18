@@ -116,10 +116,10 @@ impl LocalExecutionResult {
     }
 
     /// Create a failed result
-    pub fn failure(error: String, exit_code: Option<i32>) -> Self {
+    pub fn failure(error: String, exit_code: Option<i32>, output: Option<String>) -> Self {
         Self {
             success: false,
-            output: None,
+            output,
             error: Some(error),
             exit_code,
         }
@@ -536,14 +536,17 @@ impl<'a> LocalExecutor<'a> {
             ExecutionError::RuntimeFailed(error_msg)
         })?;
 
+        let (stdio_tx, stdio_rx) = std::sync::mpsc::channel();
+
         // Capture and report stdout in real-time
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
             let reporter_clone = event_reporter.clone();
-
+            let stdio_tx_clone = stdio_tx.clone();
             std::thread::spawn(move || {
                 for line in reader.lines() {
                     if let Ok(line) = line {
+                        let _ = stdio_tx_clone.send(line.clone());
                         if let Some(ref reporter) = reporter_clone {
                             reporter.report_event(ExecutionEvent {
                                 step: "execution".to_string(),
@@ -563,6 +566,7 @@ impl<'a> LocalExecutor<'a> {
             std::thread::spawn(move || {
                 for line in reader.lines() {
                     if let Ok(line) = line {
+                        let _ = stdio_tx.send(line.clone());
                         if let Some(ref reporter) = reporter_clone {
                             reporter.report_event(ExecutionEvent {
                                 step: "execution".to_string(),
@@ -575,9 +579,11 @@ impl<'a> LocalExecutor<'a> {
         }
 
         let cancellable = CancellableProcess::new(child, cancel_token.clone());
-        let result = cancellable.wait_with_output();
+        let result = cancellable.wait();
 
-        let run_output = match result {
+        let output = stdio_rx.iter().collect::<Vec<String>>().join("\n");
+
+        let status = match result {
             CancellableResult::Completed(output) => output,
             CancellableResult::Cancelled => {
                 if let Some(ref reporter) = event_reporter {
@@ -590,26 +596,16 @@ impl<'a> LocalExecutor<'a> {
             }
         };
 
-        let stdout = String::from_utf8_lossy(&run_output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&run_output.stderr).to_string();
-
-        if run_output.status.success() {
+        if status.success() {
             if let Some(ref reporter) = event_reporter {
                 reporter.report_event(ExecutionEvent {
                     step: "execution".to_string(),
                     message: Some("Execution completed successfully".to_string()),
                 });
             }
-            Ok(LocalExecutionResult::success(Some(stdout)))
+            Ok(LocalExecutionResult::success(Some(output)))
         } else {
-            let error_message = if !stderr.is_empty() {
-                stderr
-            } else {
-                format!(
-                    "Execution failed with exit code: {:?}",
-                    run_output.status.code()
-                )
-            };
+            let error_message = format!("Execution failed with exit code: {:?}", status.code());
 
             if let Some(reporter) = event_reporter {
                 reporter.report_event(ExecutionEvent {
@@ -620,7 +616,8 @@ impl<'a> LocalExecutor<'a> {
 
             Ok(LocalExecutionResult::failure(
                 error_message,
-                run_output.status.code(),
+                status.code(),
+                Some(output),
             ))
         }
     }

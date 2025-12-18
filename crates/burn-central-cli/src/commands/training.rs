@@ -357,29 +357,29 @@ fn execute_locally(
             "Training function `{}` executed successfully.",
             function.custom_color(BURN_ORANGE).bold()
         ));
-        if let Some(output) = result.output {
-            context.terminal().print(&format!("Output:\n{}", output));
-        }
         context
             .terminal()
             .finalize("Training completed successfully.");
     } else {
-        reporter.error("Training function execution failed.".to_string());
+        reporter.error(format!(
+            "Training function `{}` execution failed.",
+            function.custom_color(BURN_ORANGE).bold()
+        ));
+
+        if let Some(output) = result.output {
+            context.terminal().print_err(&format!(
+                "{}\n{}\n{}",
+                "=== EXECUTION LOG ===\n".yellow(),
+                output,
+                "=====================".yellow()
+            ));
+        }
 
         if let Some(error) = result.error {
             context.terminal().print_err(&format!("Error:\n{}", error));
-
-            return Err(anyhow::anyhow!(
-                "Failed to execute training function `{}`: {}",
-                function.custom_color(BURN_ORANGE).bold(),
-                error
-            ));
-        } else {
-            return Err(anyhow::anyhow!(
-                "Failed to execute training function `{}`",
-                function.custom_color(BURN_ORANGE).bold()
-            ));
         }
+
+        return Err(anyhow::anyhow!("Training execution failed"));
     }
 
     Ok(())
