@@ -359,14 +359,12 @@ impl<'a> LocalExecutor<'a> {
             let reporter_clone = event_reporter.clone();
 
             std::thread::spawn(move || {
-                for line in reader.lines() {
-                    if let Ok(line) = line {
-                        if let Some(ref reporter) = reporter_clone {
-                            reporter.report_event(ExecutionEvent {
-                                step: "build".to_string(),
-                                message: Some(line),
-                            });
-                        }
+                for line in reader.lines().map_while(Result::ok) {
+                    if let Some(ref reporter) = reporter_clone {
+                        reporter.report_event(ExecutionEvent {
+                            step: "build".to_string(),
+                            message: Some(line),
+                        });
                     }
                 }
             });
@@ -378,14 +376,12 @@ impl<'a> LocalExecutor<'a> {
             let reporter_clone = event_reporter.clone();
 
             std::thread::spawn(move || {
-                for line in reader.lines() {
-                    if let Ok(line) = line {
-                        if let Some(ref reporter) = reporter_clone {
-                            reporter.report_event(ExecutionEvent {
-                                step: "build".to_string(),
-                                message: Some(line),
-                            });
-                        }
+                for line in reader.lines().map_while(Result::ok) {
+                    if let Some(ref reporter) = reporter_clone {
+                        reporter.report_event(ExecutionEvent {
+                            step: "build".to_string(),
+                            message: Some(line),
+                        });
                     }
                 }
             });
@@ -544,15 +540,13 @@ impl<'a> LocalExecutor<'a> {
             let reporter_clone = event_reporter.clone();
             let stdio_tx_clone = stdio_tx.clone();
             std::thread::spawn(move || {
-                for line in reader.lines() {
-                    if let Ok(line) = line {
-                        let _ = stdio_tx_clone.send(line.clone());
-                        if let Some(ref reporter) = reporter_clone {
-                            reporter.report_event(ExecutionEvent {
-                                step: "execution".to_string(),
-                                message: Some(line),
-                            });
-                        }
+                for line in reader.lines().map_while(Result::ok) {
+                    let _ = stdio_tx_clone.send(line.clone());
+                    if let Some(ref reporter) = reporter_clone {
+                        reporter.report_event(ExecutionEvent {
+                            step: "execution".to_string(),
+                            message: Some(line),
+                        });
                     }
                 }
             });
@@ -564,15 +558,13 @@ impl<'a> LocalExecutor<'a> {
             let reporter_clone = event_reporter.clone();
 
             std::thread::spawn(move || {
-                for line in reader.lines() {
-                    if let Ok(line) = line {
-                        let _ = stdio_tx.send(line.clone());
-                        if let Some(ref reporter) = reporter_clone {
-                            reporter.report_event(ExecutionEvent {
-                                step: "execution".to_string(),
-                                message: Some(line),
-                            });
-                        }
+                for line in reader.lines().map_while(Result::ok) {
+                    let _ = stdio_tx.send(line.clone());
+                    if let Some(ref reporter) = reporter_clone {
+                        reporter.report_event(ExecutionEvent {
+                            step: "execution".to_string(),
+                            message: Some(line),
+                        });
                     }
                 }
             });
