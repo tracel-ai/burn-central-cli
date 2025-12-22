@@ -2,6 +2,7 @@ use anyhow::Context;
 use burn_central_workspace::ProjectContext;
 use burn_central_workspace::compute_provider::ComputeProviderJobArgs;
 use burn_central_workspace::execution::BackendType;
+use burn_central_workspace::execution::ExecutionError;
 use burn_central_workspace::execution::ProcedureType;
 use burn_central_workspace::execution::local::ExecutionEvent;
 use burn_central_workspace::execution::local::ExecutionEventReporter;
@@ -189,7 +190,6 @@ struct TrainingReporter {
     step_start_time: Mutex<Option<Instant>>,
     current_step: Mutex<Option<String>>,
     current_message: Mutex<String>,
-    timer_active: AtomicBool,
 }
 
 impl TrainingReporter {
@@ -203,7 +203,6 @@ impl TrainingReporter {
             step_start_time: Mutex::new(None),
             current_step: Mutex::new(None),
             current_message: Mutex::new("Processing...".to_string()),
-            timer_active: AtomicBool::new(true),
         }
     }
 
@@ -234,16 +233,33 @@ impl TrainingReporter {
     }
 
     pub fn stop(&self, message: String) {
-        self.timer_active.store(false, Ordering::Relaxed);
         self.flush_active_step();
         self.main_progress.stop(message);
         self.multi_progress.stop();
     }
 
+    pub fn cancel(&self) {
+        let last_message = self.current_message.lock().unwrap().clone();
+        self.main_progress.cancel(format!(
+            "{} {}",
+            "Cancelled:".yellow().bold(),
+            last_message.yellow()
+        ));
+        self.multi_progress.cancel();
+    }
+
     pub fn error(&self, message: String) {
-        self.timer_active.store(false, Ordering::Relaxed);
-        self.flush_active_step();
-        self.main_progress.clear();
+        let current_step = self.current_step.lock().unwrap();
+        let current_message = self.current_message.lock().unwrap();
+
+        if let Some(step) = current_step.as_ref() {
+            self.main_progress.set_message(format!(
+                "{} {} [{}]",
+                step.red().bold(),
+                current_message.trim(),
+                "x".red()
+            ));
+        }
         self.multi_progress.error(message);
     }
 
@@ -257,16 +273,6 @@ impl TrainingReporter {
                 self.add_to_history(history_msg);
             }
         }
-    }
-
-    pub fn is_active(&self) -> bool {
-        self.timer_active.load(Ordering::Relaxed)
-    }
-}
-
-impl Drop for TrainingReporter {
-    fn drop(&mut self) {
-        self.timer_active.store(false, Ordering::Relaxed);
     }
 }
 
@@ -338,33 +344,62 @@ fn execute_locally(
         function.custom_color(BURN_ORANGE).bold()
     ));
 
-    thread::spawn({
+    let timer_cancel = Arc::new(AtomicBool::new(true));
+    let timer_handle = thread::spawn({
+        let timer_cancel = timer_cancel.clone();
         let reporter = reporter.clone();
         move || {
-            while reporter.is_active() {
+            while timer_cancel.load(Ordering::Relaxed) {
                 thread::sleep(Duration::from_millis(1000));
-                if reporter.is_active() {
+                if timer_cancel.load(Ordering::Relaxed) {
                     reporter.update_spinner_display();
                 }
             }
         }
     });
 
-    let result = executor.execute(config, Some(reporter.clone()))?;
+    let result = executor.execute(config, Some(reporter.clone()));
+
+    timer_cancel.store(false, Ordering::Relaxed);
+    let _ = timer_handle.join();
+
+    if let Err(e) = &result {
+        // reporter.error("An error occurred while executing training function.".to_string());
+        match e {
+            ExecutionError::BuildFailed {
+                message,
+                diagnostics,
+            } => {
+                reporter.error("Training execution failed".to_string());
+                context.terminal().print_err(&format!("Error: {}", message));
+                if let Some(diagnostics) = diagnostics {
+                    context.terminal().print_err(&format!(
+                        "{}\n{}\n{}",
+                        "=== COMPILATION DIAGNOSTICS ===\n".yellow(),
+                        diagnostics,
+                        "===============================".yellow()
+                    ));
+                }
+            }
+            ExecutionError::Cancelled => {
+                reporter.cancel();
+            }
+            error => {
+                reporter.error("Training execution failed".to_string());
+                context.terminal().print_err(&format!("Error: {}", error));
+            }
+        }
+        return Err(anyhow::anyhow!("Training execution failed"));
+    }
+    let result = result.unwrap();
 
     if result.success {
-        reporter.stop(format!(
-            "Training function `{}` executed successfully.",
-            function.custom_color(BURN_ORANGE).bold()
-        ));
+        reporter.stop("Training executed successfully".to_string());
         context
             .terminal()
-            .finalize("Training completed successfully.");
+            .finalize("Training completed successfully");
     } else {
-        reporter.error(format!(
-            "Training function `{}` execution failed.",
-            function.custom_color(BURN_ORANGE).bold()
-        ));
+        reporter.error("Training execution failed".to_string());
 
         if let Some(output) = result.output {
             context.terminal().print_err(&format!(

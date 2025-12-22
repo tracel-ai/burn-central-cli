@@ -1,7 +1,6 @@
 pub mod cancellable;
 pub mod local;
 
-use crate::tools::function_discovery::FunctionMetadata;
 use serde::{Deserialize, Serialize};
 use strum::EnumString;
 
@@ -52,54 +51,21 @@ pub enum BackendType {
 /// Error types specific to execution
 #[derive(thiserror::Error, Debug)]
 pub enum ExecutionError {
-    #[error("Build failed: {0}")]
-    BuildFailed(String),
+    #[error("Code generation failed: {0}")]
+    CodeGenerationFailed(String),
+
+    #[error("Build failed: {message}")]
+    BuildFailed {
+        message: String,
+        diagnostics: Option<String>,
+    },
 
     #[error("Runtime execution failed: {0}")]
     RuntimeFailed(String),
 
-    #[error("Function not found: {0}")]
-    FunctionNotFound(String),
+    #[error("Function discovery failed: {0}")]
+    FunctionDiscovery(String),
 
     #[error("Execution cancelled")]
     Cancelled,
-}
-
-/// Validate that a function exists in the available functions
-pub fn validate_function(
-    function: &str,
-    available_functions: &[FunctionMetadata],
-) -> crate::Result<()> {
-    let function_names: Vec<&str> = available_functions
-        .iter()
-        .map(|f| f.fn_name.as_str())
-        .collect();
-
-    if !function_names.contains(&function) {
-        return Err(ExecutionError::FunctionNotFound(format!(
-            "Function '{}' not found. Available functions: {:?}",
-            function, function_names
-        ))
-        .into());
-    }
-
-    Ok(())
-}
-
-/// Get training functions from a list of function metadata
-pub fn get_training_functions(functions: &[FunctionMetadata]) -> Vec<String> {
-    functions
-        .iter()
-        .filter(|f| f.proc_type.to_lowercase() == "training")
-        .map(|f| f.routine_name.clone())
-        .collect()
-}
-
-/// Get inference functions from a list of function metadata
-pub fn get_inference_functions(functions: &[FunctionMetadata]) -> Vec<String> {
-    functions
-        .iter()
-        .filter(|f| f.proc_type.to_lowercase() == "inference")
-        .map(|f| f.routine_name.clone())
-        .collect()
 }

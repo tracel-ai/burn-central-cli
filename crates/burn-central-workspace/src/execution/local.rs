@@ -18,9 +18,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::execution::cancellable::{
-    CancellableProcess, CancellableResult, check_cancelled_anyhow,
-};
+use crate::execution::cancellable::{CancellableProcess, CancellableResult};
 
 /// Configuration for executing a function locally
 #[derive(Debug, Clone)]
@@ -182,7 +180,7 @@ impl<'a> LocalExecutor<'a> {
         &self,
         config: LocalExecutionConfig,
         event_reporter: Option<Arc<dyn ExecutionEventReporter>>,
-    ) -> crate::Result<LocalExecutionResult> {
+    ) -> Result<LocalExecutionResult, ExecutionError> {
         let cancellation_token = CancellationToken::new();
         self.execute_cancellable(config, &cancellation_token, event_reporter)
     }
@@ -193,8 +191,11 @@ impl<'a> LocalExecutor<'a> {
         config: LocalExecutionConfig,
         cancel_token: &CancellationToken,
         event_reporter: Option<Arc<dyn ExecutionEventReporter>>,
-    ) -> crate::Result<LocalExecutionResult> {
-        let functions = self.project.load_functions_cancellable(cancel_token)?;
+    ) -> Result<LocalExecutionResult, ExecutionError> {
+        let functions = self
+            .project
+            .load_functions_cancellable(cancel_token)
+            .map_err(|e| ExecutionError::FunctionDiscovery(format!("{e}")))?;
         let function_refs = functions.get_function_references();
         self.validate_function(&config.function, function_refs)?;
 
@@ -243,14 +244,14 @@ impl<'a> LocalExecutor<'a> {
         &self,
         function: &str,
         available_functions: &[FunctionMetadata],
-    ) -> crate::Result<()> {
+    ) -> Result<(), ExecutionError> {
         let function_names: Vec<&str> = available_functions
             .iter()
             .map(|f| f.routine_name.as_str())
             .collect();
 
         if !function_names.contains(&function) {
-            return Err(ExecutionError::FunctionNotFound(format!(
+            return Err(ExecutionError::FunctionDiscovery(format!(
                 "Function '{}' not found. Available functions: {:?}",
                 function, function_names
             ))
@@ -266,8 +267,10 @@ impl<'a> LocalExecutor<'a> {
         config: &BuildConfig,
         cancel_token: &CancellationToken,
         event_reporter: Option<Arc<dyn ExecutionEventReporter>>,
-    ) -> crate::Result<PathBuf> {
-        check_cancelled_anyhow!(cancel_token, "Executable crate generation was cancelled");
+    ) -> Result<PathBuf, ExecutionError> {
+        if cancel_token.is_cancelled() {
+            return Err(ExecutionError::Cancelled);
+        }
 
         if let Some(ref reporter) = event_reporter {
             reporter.report_event(ExecutionEvent {
@@ -276,7 +279,10 @@ impl<'a> LocalExecutor<'a> {
             });
         }
 
-        let functions = self.project.load_functions_cancellable(cancel_token)?;
+        let functions = self
+            .project
+            .load_functions_cancellable(cancel_token)
+            .map_err(|e| ExecutionError::FunctionDiscovery(format!("{e}")))?;
 
         let generated_crate = crate::generation::crate_gen::create_crate(
             crate_name,
@@ -287,9 +293,22 @@ impl<'a> LocalExecutor<'a> {
             self.project.get_current_package(),
         );
 
-        let mut cache = self.project.burn_dir().load_cache()?;
+        let mut cache = self.project.burn_dir().load_cache().map_err(|e| {
+            ExecutionError::CodeGenerationFailed(format!("Failed to load cache: {}", e))
+        })?;
+
+        if cancel_token.is_cancelled() {
+            return Err(ExecutionError::Cancelled);
+        }
         let crate_path = self.project.burn_dir().crates_dir().join(crate_name);
-        generated_crate.write_to_burn_dir(&crate_path, &mut cache)?;
+        generated_crate
+            .write_to_burn_dir(&crate_path, &mut cache)
+            .map_err(|e| {
+                ExecutionError::CodeGenerationFailed(format!(
+                    "Failed to write generated crate: {}",
+                    e
+                ))
+            })?;
 
         if let Some(ref reporter) = event_reporter {
             reporter.report_event(ExecutionEvent {
@@ -311,7 +330,7 @@ impl<'a> LocalExecutor<'a> {
         config: &BuildConfig,
         cancel_token: &CancellationToken,
         event_reporter: Option<Arc<dyn ExecutionEventReporter>>,
-    ) -> crate::Result<PathBuf> {
+    ) -> Result<PathBuf, ExecutionError> {
         let build_dir = crate_dir;
 
         if let Some(ref reporter) = event_reporter {
@@ -328,6 +347,7 @@ impl<'a> LocalExecutor<'a> {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
+        build_cmd.arg("--message-format=json");
         build_cmd.arg(config.build_profile.as_cargo_arg());
         build_cmd.env("BURN_CENTRAL_CODE_VERSION", &config.code_version);
         build_cmd.args([
@@ -350,8 +370,14 @@ impl<'a> LocalExecutor<'a> {
                     message: Some(error_msg.clone()),
                 });
             }
-            ExecutionError::BuildFailed(error_msg)
+            ExecutionError::BuildFailed {
+                message: error_msg,
+                diagnostics: None,
+            }
         })?;
+
+        let (binary_path_tx, binary_path_rx) = std::sync::mpsc::channel();
+        let (build_errors_tx, build_errors_rx) = std::sync::mpsc::channel();
 
         // Capture and report stdout (cargo messages)
         if let Some(stdout) = child.stdout.take() {
@@ -359,29 +385,32 @@ impl<'a> LocalExecutor<'a> {
             let reporter_clone = event_reporter.clone();
 
             std::thread::spawn(move || {
-                for line in reader.lines().map_while(Result::ok) {
-                    if let Some(ref reporter) = reporter_clone {
-                        reporter.report_event(ExecutionEvent {
-                            step: "build".to_string(),
-                            message: Some(line),
-                        });
-                    }
-                }
-            });
-        }
-
-        // Capture and report stderr
-        if let Some(stderr) = child.stderr.take() {
-            let reader = BufReader::new(stderr);
-            let reporter_clone = event_reporter.clone();
-
-            std::thread::spawn(move || {
-                for line in reader.lines().map_while(Result::ok) {
-                    if let Some(ref reporter) = reporter_clone {
-                        reporter.report_event(ExecutionEvent {
-                            step: "build".to_string(),
-                            message: Some(line),
-                        });
+                let stream = cargo_metadata::Message::parse_stream(reader);
+                for maybe_message in stream {
+                    if let Ok(message) = maybe_message {
+                        match message {
+                            cargo_metadata::Message::CompilerArtifact(artifact) => {
+                                if let Some(executable) = artifact.executable {
+                                    let _ = binary_path_tx.send(executable);
+                                }
+                            }
+                            cargo_metadata::Message::CompilerMessage(msg) => {
+                                if let Some(ref reporter) = reporter_clone {
+                                    reporter.report_event(ExecutionEvent {
+                                        step: "build".to_string(),
+                                        message: Some(msg.message.message.clone()),
+                                    });
+                                }
+                                let rendered = msg.message.rendered.unwrap_or_default();
+                                if matches!(
+                                    msg.message.level,
+                                    cargo_metadata::diagnostic::DiagnosticLevel::Error
+                                ) {
+                                    let _ = build_errors_tx.send(rendered);
+                                }
+                            }
+                            _ => {}
+                        }
                     }
                 }
             });
@@ -400,15 +429,20 @@ impl<'a> LocalExecutor<'a> {
                         });
                     }
                 } else {
-                    let error_msg =
-                        format!("Cargo build failed with exit code: {:?}", status.code());
                     if let Some(ref reporter) = event_reporter {
                         reporter.report_event(ExecutionEvent {
                             step: "build".to_string(),
-                            message: Some(error_msg.clone()),
+                            message: Some("Build failed".to_string()),
                         });
                     }
-                    return Err(ExecutionError::BuildFailed(error_msg).into());
+                    let diagnostics = build_errors_rx
+                        .try_iter()
+                        .collect::<Vec<String>>()
+                        .join("\n");
+                    return Err(ExecutionError::BuildFailed {
+                        message: "Compiler encountered errors".to_string(),
+                        diagnostics: Some(diagnostics),
+                    });
                 }
             }
             CancellableResult::Cancelled => {
@@ -419,20 +453,26 @@ impl<'a> LocalExecutor<'a> {
                         message: Some(error_msg.to_string()),
                     });
                 }
-                return Err(ExecutionError::RuntimeFailed(error_msg.to_string()).into());
+                return Err(ExecutionError::Cancelled);
             }
         }
 
-        let profile_dir = match config.build_profile {
-            BuildProfile::Debug => "debug",
-            BuildProfile::Release => "release",
-        };
-
-        let executable_name = format!("{crate_name}{}", std::env::consts::EXE_SUFFIX);
-        let executable_path = build_dir
-            .join("target")
-            .join(profile_dir)
-            .join(executable_name);
+        let executable_path = binary_path_rx
+            .recv()
+            .map_err(|_| {
+                let error_msg = "Failed to retrieve built executable path".to_string();
+                if let Some(ref reporter) = event_reporter {
+                    reporter.report_event(ExecutionEvent {
+                        step: "build".to_string(),
+                        message: Some(error_msg.clone()),
+                    });
+                }
+                ExecutionError::BuildFailed {
+                    message: error_msg,
+                    diagnostics: None,
+                }
+            })?
+            .into_std_path_buf();
 
         if !executable_path.exists() {
             let error_msg = format!(
@@ -445,7 +485,10 @@ impl<'a> LocalExecutor<'a> {
                     message: Some(error_msg.clone()),
                 });
             }
-            return Err(ExecutionError::BuildFailed(error_msg).into());
+            return Err(ExecutionError::BuildFailed {
+                message: error_msg,
+                diagnostics: None,
+            });
         }
 
         if let Some(ref reporter) = event_reporter {
@@ -468,7 +511,7 @@ impl<'a> LocalExecutor<'a> {
         config: &RunConfig,
         cancel_token: &CancellationToken,
         event_reporter: Option<Arc<dyn ExecutionEventReporter>>,
-    ) -> crate::Result<LocalExecutionResult> {
+    ) -> Result<LocalExecutionResult, ExecutionError> {
         if let Some(ref reporter) = event_reporter {
             reporter.report_event(ExecutionEvent {
                 step: "execution".to_string(),
