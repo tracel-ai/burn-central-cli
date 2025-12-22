@@ -254,8 +254,7 @@ impl<'a> LocalExecutor<'a> {
             return Err(ExecutionError::FunctionDiscovery(format!(
                 "Function '{}' not found. Available functions: {:?}",
                 function, function_names
-            ))
-            .into());
+            )));
         }
 
         Ok(())
@@ -386,31 +385,29 @@ impl<'a> LocalExecutor<'a> {
 
             std::thread::spawn(move || {
                 let stream = cargo_metadata::Message::parse_stream(reader);
-                for maybe_message in stream {
-                    if let Ok(message) = maybe_message {
-                        match message {
-                            cargo_metadata::Message::CompilerArtifact(artifact) => {
-                                if let Some(executable) = artifact.executable {
-                                    let _ = binary_path_tx.send(executable);
-                                }
+                for message in stream.flatten() {
+                    match message {
+                        cargo_metadata::Message::CompilerArtifact(artifact) => {
+                            if let Some(executable) = artifact.executable {
+                                let _ = binary_path_tx.send(executable);
                             }
-                            cargo_metadata::Message::CompilerMessage(msg) => {
-                                if let Some(ref reporter) = reporter_clone {
-                                    reporter.report_event(ExecutionEvent {
-                                        step: "build".to_string(),
-                                        message: Some(msg.message.message.clone()),
-                                    });
-                                }
-                                let rendered = msg.message.rendered.unwrap_or_default();
-                                if matches!(
-                                    msg.message.level,
-                                    cargo_metadata::diagnostic::DiagnosticLevel::Error
-                                ) {
-                                    let _ = build_errors_tx.send(rendered);
-                                }
-                            }
-                            _ => {}
                         }
+                        cargo_metadata::Message::CompilerMessage(msg) => {
+                            if let Some(ref reporter) = reporter_clone {
+                                reporter.report_event(ExecutionEvent {
+                                    step: "build".to_string(),
+                                    message: Some(msg.message.message.clone()),
+                                });
+                            }
+                            let rendered = msg.message.rendered.unwrap_or_default();
+                            if matches!(
+                                msg.message.level,
+                                cargo_metadata::diagnostic::DiagnosticLevel::Error
+                            ) {
+                                let _ = build_errors_tx.send(rendered);
+                            }
+                        }
+                        _ => {}
                     }
                 }
             });
