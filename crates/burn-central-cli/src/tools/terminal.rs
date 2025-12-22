@@ -36,6 +36,10 @@ impl Terminal {
         cliclack::spinner()
     }
 
+    pub fn multiprogress(&self, prompt: &str) -> cliclack::MultiProgress {
+        cliclack::multi_progress(prompt)
+    }
+
     #[allow(dead_code)]
     pub fn clear(&self) {
         clear_screen().expect("Failed to clear screen");

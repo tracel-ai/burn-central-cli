@@ -12,8 +12,10 @@ use crate::{
     tools::{cargo, function_discovery::FunctionMetadata},
 };
 use std::{
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::Arc,
 };
 
 use crate::execution::cancellable::{
@@ -114,10 +116,10 @@ impl LocalExecutionResult {
     }
 
     /// Create a failed result
-    pub fn failure(error: String, exit_code: Option<i32>) -> Self {
+    pub fn failure(error: String, exit_code: Option<i32>, output: Option<String>) -> Self {
         Self {
             success: false,
-            output: None,
+            output,
             error: Some(error),
             exit_code,
         }
@@ -134,6 +136,36 @@ impl LocalExecutionResult {
     }
 }
 
+pub struct ExecutionEvent {
+    pub step: String,
+    pub message: Option<String>,
+}
+
+pub trait ExecutionEventReporter: Send + Sync {
+    fn report_event(&self, event: ExecutionEvent);
+}
+
+impl ExecutionEventReporter for () {
+    fn report_event(&self, _event: ExecutionEvent) {
+        // No-op
+    }
+}
+
+impl<F> ExecutionEventReporter for F
+where
+    F: Fn(ExecutionEvent) + Send + Sync,
+{
+    fn report_event(&self, event: ExecutionEvent) {
+        (self)(event);
+    }
+}
+
+impl ExecutionEventReporter for std::sync::mpsc::Sender<ExecutionEvent> {
+    fn report_event(&self, event: ExecutionEvent) {
+        let _ = self.send(event);
+    }
+}
+
 /// Core local executor - handles building and running functions locally
 pub struct LocalExecutor<'a> {
     project: &'a ProjectContext,
@@ -146,9 +178,13 @@ impl<'a> LocalExecutor<'a> {
     }
 
     /// Execute a function locally
-    pub fn execute(&self, config: LocalExecutionConfig) -> crate::Result<LocalExecutionResult> {
+    pub fn execute(
+        &self,
+        config: LocalExecutionConfig,
+        event_reporter: Option<Arc<dyn ExecutionEventReporter>>,
+    ) -> crate::Result<LocalExecutionResult> {
         let cancellation_token = CancellationToken::new();
-        self.execute_cancellable(config, &cancellation_token)
+        self.execute_cancellable(config, &cancellation_token, event_reporter)
     }
 
     /// Execute a function locally with cancellation support
@@ -156,6 +192,7 @@ impl<'a> LocalExecutor<'a> {
         &self,
         config: LocalExecutionConfig,
         cancel_token: &CancellationToken,
+        event_reporter: Option<Arc<dyn ExecutionEventReporter>>,
     ) -> crate::Result<LocalExecutionResult> {
         let functions = self.project.load_functions_cancellable(cancel_token)?;
         let function_refs = functions.get_function_references();
@@ -168,14 +205,24 @@ impl<'a> LocalExecutor<'a> {
         };
 
         let crate_name = "burn_central_executable";
-        let crate_dir = self.generate_executable_crate(crate_name, &build_config, cancel_token)?;
+        let crate_dir = self.generate_executable_crate(
+            crate_name,
+            &build_config,
+            cancel_token,
+            event_reporter.clone(),
+        )?;
 
         if cancel_token.is_cancelled() {
             return Ok(LocalExecutionResult::cancelled());
         }
 
-        let executable_path =
-            self.build_executable(crate_name, &crate_dir, &build_config, cancel_token)?;
+        let executable_path = self.build_executable(
+            crate_name,
+            &crate_dir,
+            &build_config,
+            cancel_token,
+            event_reporter.clone(),
+        )?;
 
         let run_config = RunConfig {
             function: config.function,
@@ -188,7 +235,7 @@ impl<'a> LocalExecutor<'a> {
             return Ok(LocalExecutionResult::cancelled());
         }
 
-        self.run_executable(&executable_path, &run_config, cancel_token)
+        self.run_executable(&executable_path, &run_config, cancel_token, event_reporter)
     }
 
     /// Validate that the requested function exists and matches the procedure type
@@ -218,8 +265,16 @@ impl<'a> LocalExecutor<'a> {
         crate_name: &str,
         config: &BuildConfig,
         cancel_token: &CancellationToken,
+        event_reporter: Option<Arc<dyn ExecutionEventReporter>>,
     ) -> crate::Result<PathBuf> {
         check_cancelled_anyhow!(cancel_token, "Executable crate generation was cancelled");
+
+        if let Some(ref reporter) = event_reporter {
+            reporter.report_event(ExecutionEvent {
+                step: "codegen".to_string(),
+                message: Some(format!("Generating executable crate '{}'", crate_name)),
+            });
+        }
 
         let functions = self.project.load_functions_cancellable(cancel_token)?;
 
@@ -236,6 +291,16 @@ impl<'a> LocalExecutor<'a> {
         let crate_path = self.project.burn_dir().crates_dir().join(crate_name);
         generated_crate.write_to_burn_dir(&crate_path, &mut cache)?;
 
+        if let Some(ref reporter) = event_reporter {
+            reporter.report_event(ExecutionEvent {
+                step: "codegen".to_string(),
+                message: Some(format!(
+                    "Generated executable crate at: {}",
+                    crate_path.display()
+                )),
+            });
+        }
+
         Ok(crate_path)
     }
 
@@ -245,44 +310,116 @@ impl<'a> LocalExecutor<'a> {
         crate_dir: &Path,
         config: &BuildConfig,
         cancel_token: &CancellationToken,
+        event_reporter: Option<Arc<dyn ExecutionEventReporter>>,
     ) -> crate::Result<PathBuf> {
         let build_dir = crate_dir;
+
+        if let Some(ref reporter) = event_reporter {
+            reporter.report_event(ExecutionEvent {
+                step: "build".to_string(),
+                message: Some(format!("Starting cargo build for crate '{}'", crate_name)),
+            });
+        }
 
         let mut build_cmd = cargo::command();
         build_cmd
             .current_dir(build_dir)
             .arg("build")
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit());
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
         build_cmd.arg(config.build_profile.as_cargo_arg());
-
         build_cmd.env("BURN_CENTRAL_CODE_VERSION", &config.code_version);
-
         build_cmd.args([
             "--manifest-path",
             &build_dir.join("Cargo.toml").to_string_lossy(),
         ]);
 
-        let child = build_cmd.spawn().map_err(|e| {
-            ExecutionError::BuildFailed(format!("Failed to execute cargo build: {}", e))
+        if let Some(ref reporter) = event_reporter {
+            reporter.report_event(ExecutionEvent {
+                step: "build".to_string(),
+                message: Some("Executing cargo build...".to_string()),
+            });
+        }
+
+        let mut child = build_cmd.spawn().map_err(|e| {
+            let error_msg = format!("Failed to execute cargo build: {}", e);
+            if let Some(ref reporter) = event_reporter {
+                reporter.report_event(ExecutionEvent {
+                    step: "build".to_string(),
+                    message: Some(error_msg.clone()),
+                });
+            }
+            ExecutionError::BuildFailed(error_msg)
         })?;
+
+        // Capture and report stdout (cargo messages)
+        if let Some(stdout) = child.stdout.take() {
+            let reader = BufReader::new(stdout);
+            let reporter_clone = event_reporter.clone();
+
+            std::thread::spawn(move || {
+                for line in reader.lines().map_while(Result::ok) {
+                    if let Some(ref reporter) = reporter_clone {
+                        reporter.report_event(ExecutionEvent {
+                            step: "build".to_string(),
+                            message: Some(line),
+                        });
+                    }
+                }
+            });
+        }
+
+        // Capture and report stderr
+        if let Some(stderr) = child.stderr.take() {
+            let reader = BufReader::new(stderr);
+            let reporter_clone = event_reporter.clone();
+
+            std::thread::spawn(move || {
+                for line in reader.lines().map_while(Result::ok) {
+                    if let Some(ref reporter) = reporter_clone {
+                        reporter.report_event(ExecutionEvent {
+                            step: "build".to_string(),
+                            message: Some(line),
+                        });
+                    }
+                }
+            });
+        }
 
         let cancellable = CancellableProcess::new(child, cancel_token.clone());
         let result = cancellable.wait();
 
         match result {
             CancellableResult::Completed(status) => {
-                if !status.success() {
-                    return Err(
-                        ExecutionError::BuildFailed("Cargo build failed".to_string()).into(),
-                    );
+                if status.success() {
+                    if let Some(ref reporter) = event_reporter {
+                        reporter.report_event(ExecutionEvent {
+                            step: "build".to_string(),
+                            message: Some("Build completed successfully".to_string()),
+                        });
+                    }
+                } else {
+                    let error_msg =
+                        format!("Cargo build failed with exit code: {:?}", status.code());
+                    if let Some(ref reporter) = event_reporter {
+                        reporter.report_event(ExecutionEvent {
+                            step: "build".to_string(),
+                            message: Some(error_msg.clone()),
+                        });
+                    }
+                    return Err(ExecutionError::BuildFailed(error_msg).into());
                 }
             }
             CancellableResult::Cancelled => {
-                return Err(
-                    ExecutionError::RuntimeFailed("Build cancelled by user".to_string()).into(),
-                );
+                let error_msg = "Build cancelled by user";
+                if let Some(ref reporter) = event_reporter {
+                    reporter.report_event(ExecutionEvent {
+                        step: "build".to_string(),
+                        message: Some(error_msg.to_string()),
+                    });
+                }
+                return Err(ExecutionError::RuntimeFailed(error_msg.to_string()).into());
             }
         }
 
@@ -298,9 +435,27 @@ impl<'a> LocalExecutor<'a> {
             .join(executable_name);
 
         if !executable_path.exists() {
-            return Err(
-                ExecutionError::BuildFailed("Built executable not found".to_string()).into(),
+            let error_msg = format!(
+                "Built executable not found at: {}",
+                executable_path.display()
             );
+            if let Some(ref reporter) = event_reporter {
+                reporter.report_event(ExecutionEvent {
+                    step: "build".to_string(),
+                    message: Some(error_msg.clone()),
+                });
+            }
+            return Err(ExecutionError::BuildFailed(error_msg).into());
+        }
+
+        if let Some(ref reporter) = event_reporter {
+            reporter.report_event(ExecutionEvent {
+                step: "build".to_string(),
+                message: Some(format!(
+                    "Executable built successfully: {}",
+                    executable_path.display()
+                )),
+            });
         }
 
         Ok(executable_path)
@@ -312,7 +467,18 @@ impl<'a> LocalExecutor<'a> {
         executable_path: &Path,
         config: &RunConfig,
         cancel_token: &CancellationToken,
+        event_reporter: Option<Arc<dyn ExecutionEventReporter>>,
     ) -> crate::Result<LocalExecutionResult> {
+        if let Some(ref reporter) = event_reporter {
+            reporter.report_event(ExecutionEvent {
+                step: "execution".to_string(),
+                message: Some(format!(
+                    "Starting execution of function '{}'",
+                    config.function
+                )),
+            });
+        }
+
         let mut run_cmd = Command::new(executable_path);
 
         run_cmd.env("BURN_PROJECT_DIR", self.project.get_crate_path());
@@ -320,13 +486,18 @@ impl<'a> LocalExecutor<'a> {
         let project = self.project.get_project();
         run_cmd.args(["--namespace", &project.owner]);
         run_cmd.args(["--project", &project.name]);
-
         run_cmd.args(["--api-key", &config.api_key]);
-
         run_cmd.args(["--endpoint", &config.api_endpoint]);
 
         let args_str = serde_json::to_string(&config.args).map_err(|e| {
-            ExecutionError::RuntimeFailed(format!("Failed to serialize args: {}", e))
+            let error_msg = format!("Failed to serialize args: {}", e);
+            if let Some(ref reporter) = event_reporter {
+                reporter.report_event(ExecutionEvent {
+                    step: "execution".to_string(),
+                    message: Some(error_msg.clone()),
+                });
+            }
+            ExecutionError::RuntimeFailed(error_msg)
         })?;
         run_cmd.args(["--args", &args_str]);
 
@@ -339,41 +510,106 @@ impl<'a> LocalExecutor<'a> {
         run_cmd.arg(&config.function);
 
         run_cmd
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .stdin(Stdio::piped());
 
-        let child = run_cmd.spawn().map_err(|e| {
-            ExecutionError::RuntimeFailed(format!("Failed to execute binary: {}", e))
+        if let Some(ref reporter) = event_reporter {
+            reporter.report_event(ExecutionEvent {
+                step: "execution".to_string(),
+                message: Some("Executing binary...".to_string()),
+            });
+        }
+
+        let mut child = run_cmd.spawn().map_err(|e| {
+            let error_msg = format!("Failed to execute binary: {}", e);
+            if let Some(ref reporter) = event_reporter {
+                reporter.report_event(ExecutionEvent {
+                    step: "execution".to_string(),
+                    message: Some(error_msg.clone()),
+                });
+            }
+            ExecutionError::RuntimeFailed(error_msg)
         })?;
 
+        let (stdio_tx, stdio_rx) = std::sync::mpsc::channel();
+
+        // Capture and report stdout in real-time
+        if let Some(stdout) = child.stdout.take() {
+            let reader = BufReader::new(stdout);
+            let reporter_clone = event_reporter.clone();
+            let stdio_tx_clone = stdio_tx.clone();
+            std::thread::spawn(move || {
+                for line in reader.lines().map_while(Result::ok) {
+                    let _ = stdio_tx_clone.send(line.clone());
+                    if let Some(ref reporter) = reporter_clone {
+                        reporter.report_event(ExecutionEvent {
+                            step: "execution".to_string(),
+                            message: Some(line),
+                        });
+                    }
+                }
+            });
+        }
+
+        // Capture and report stderr in real-time
+        if let Some(stderr) = child.stderr.take() {
+            let reader = BufReader::new(stderr);
+            let reporter_clone = event_reporter.clone();
+
+            std::thread::spawn(move || {
+                for line in reader.lines().map_while(Result::ok) {
+                    let _ = stdio_tx.send(line.clone());
+                    if let Some(ref reporter) = reporter_clone {
+                        reporter.report_event(ExecutionEvent {
+                            step: "execution".to_string(),
+                            message: Some(line),
+                        });
+                    }
+                }
+            });
+        }
+
         let cancellable = CancellableProcess::new(child, cancel_token.clone());
-        let result = cancellable.wait_with_output();
-        let run_output = match result {
+        let result = cancellable.wait();
+
+        let output = stdio_rx.iter().collect::<Vec<String>>().join("\n");
+
+        let status = match result {
             CancellableResult::Completed(output) => output,
             CancellableResult::Cancelled => {
+                if let Some(ref reporter) = event_reporter {
+                    reporter.report_event(ExecutionEvent {
+                        step: "execution".to_string(),
+                        message: Some("Execution cancelled by user".to_string()),
+                    });
+                }
                 return Ok(LocalExecutionResult::cancelled());
             }
         };
 
-        let stdout = String::from_utf8_lossy(&run_output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&run_output.stderr).to_string();
-
-        if run_output.status.success() {
-            Ok(LocalExecutionResult::success(Some(stdout)))
+        if status.success() {
+            if let Some(ref reporter) = event_reporter {
+                reporter.report_event(ExecutionEvent {
+                    step: "execution".to_string(),
+                    message: Some("Execution completed successfully".to_string()),
+                });
+            }
+            Ok(LocalExecutionResult::success(Some(output)))
         } else {
-            let error_message = if !stderr.is_empty() {
-                stderr
-            } else {
-                format!(
-                    "Execution failed with exit code: {:?}",
-                    run_output.status.code()
-                )
-            };
+            let error_message = format!("Execution failed with exit code: {:?}", status.code());
+
+            if let Some(reporter) = event_reporter {
+                reporter.report_event(ExecutionEvent {
+                    step: "execution".to_string(),
+                    message: Some(error_message.clone()),
+                });
+            }
 
             Ok(LocalExecutionResult::failure(
                 error_message,
-                run_output.status.code(),
+                status.code(),
+                Some(output),
             ))
         }
     }
