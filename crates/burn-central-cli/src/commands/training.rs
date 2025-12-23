@@ -1,6 +1,6 @@
 use anyhow::Context;
 use burn_central_workspace::ProjectContext;
-use burn_central_workspace::compute_provider::ComputeProviderJobArgs;
+use burn_central_workspace::compute_provider::TrainingJobArgs;
 use burn_central_workspace::execution::BackendType;
 use burn_central_workspace::execution::ExecutionError;
 use burn_central_workspace::execution::ProcedureType;
@@ -135,19 +135,10 @@ fn execute_remotely(
 
     let launch_args = ExperimentConfig::load_config(args.args, args.overrides)?;
 
-    let command = ComputeProviderJobArgs {
+    let command = TrainingJobArgs {
         function: function.clone(),
         backend: args.backend.unwrap_or_default(),
         args: Some(launch_args.data),
-        digest: code_version.clone(),
-        namespace: bc_project.owner.clone(),
-        project: bc_project.name.clone(),
-        key: context
-            .get_api_key()
-            .context("No API key available")?
-            .to_string(),
-        procedure_type: ProcedureType::Training,
-        api_endpoint: context.get_api_endpoint().to_string(),
     };
 
     let client = context.create_client()?;
