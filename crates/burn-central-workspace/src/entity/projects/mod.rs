@@ -309,11 +309,11 @@ impl ProjectContext {
         &self,
         cancel_token: &CancellationToken,
     ) -> anyhow::Result<FunctionRegistry> {
-        use crate::execution::cancellable::check_cancelled_anyhow;
-
         let mut functions = self.function_registry.lock().unwrap();
         if functions.is_empty() {
-            check_cancelled_anyhow!(cancel_token, "Function loading was cancelled");
+            if cancel_token.is_cancelled() {
+                return Err(anyhow::anyhow!("Function discovery was cancelled"));
+            }
 
             let current_pkg = self.get_current_package();
             let discovered_functions = FunctionDiscovery::new(&self.crate_info.user_crate_dir)

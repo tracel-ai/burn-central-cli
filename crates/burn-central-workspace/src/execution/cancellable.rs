@@ -285,38 +285,6 @@ impl CancellablePoller {
     }
 }
 
-/// Quick check if cancellation is requested, returning early with anyhow::Error
-///
-/// This macro can be used for functions that return anyhow::Result.
-///
-/// # Example
-/// ```rust
-/// use burn_central_workspace::execution::cancellable::CancellationToken;
-/// use burn_central_workspace::execution::cancellable::check_cancelled_anyhow;
-///
-/// fn my_operation(token: &CancellationToken) -> anyhow::Result<()> {
-///     check_cancelled_anyhow!(token, "My operation was cancelled");
-///
-///     // Continue with operation...
-///     Ok(())
-/// }
-/// ```
-#[macro_export]
-macro_rules! check_cancelled_anyhow {
-    ($token:expr) => {
-        if $token.is_cancelled() {
-            return Err(anyhow::anyhow!("Operation was cancelled"));
-        }
-    };
-    ($token:expr, $msg:expr) => {
-        if $token.is_cancelled() {
-            return Err(anyhow::anyhow!($msg));
-        }
-    };
-}
-
-pub use check_cancelled_anyhow;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,32 +371,6 @@ mod tests {
         });
 
         assert!(result.is_cancelled());
-    }
-
-    #[test]
-    fn test_check_cancelled_anyhow_macro() {
-        let token = CancellationToken::new();
-
-        // Should not return early when not cancelled
-        let result = || -> anyhow::Result<i32> {
-            check_cancelled_anyhow!(&token);
-            Ok(42)
-        }();
-        assert_eq!(result.unwrap(), 42);
-
-        // Should return early when cancelled
-        token.cancel();
-        let result = || -> anyhow::Result<i32> {
-            check_cancelled_anyhow!(&token, "Custom cancellation message");
-            Ok(42)
-        }();
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Custom cancellation message")
-        );
     }
 
     mod token {
