@@ -7,7 +7,6 @@ use crate::tools::function_discovery::{FunctionDiscovery, FunctionMetadata};
 use crate::tools::functions_registry::FunctionRegistry;
 
 pub mod burn_dir;
-pub mod project_path;
 
 #[derive(Debug)]
 pub enum ErrorKind {

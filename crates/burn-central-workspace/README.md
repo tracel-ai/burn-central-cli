@@ -33,7 +33,7 @@ use burn_central_workspace::{BurnCentralContext, Config, Environment, ProjectCon
 fn main() -> anyhow::Result<()> {
     // Create a configuration
     let config = Config {
-        api_endpoint: "https://heat.tracel.ai/api/".to_string(),
+        api_endpoint: "https://central.burn.dev/api/".to_string(),
     };
     
     // Create and initialize context
