@@ -220,7 +220,7 @@ fn generate_main_rs(
         })
         .collect();
 
-    let recursion_limit = if vec![BackendType::Wgpu, BackendType::Metal].contains(main_backend) {
+    let recursion_limit = if [BackendType::Wgpu, BackendType::Metal].contains(main_backend) {
         quote! {
             #![recursion_limit = "256"]
         }
