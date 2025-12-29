@@ -50,7 +50,7 @@ pub enum BackendType {
     Rocm,
     Metal,
     Vulkan,
-    CPU,
+    Cpu,
     Candle,
 }
 

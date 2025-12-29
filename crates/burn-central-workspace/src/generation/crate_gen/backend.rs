@@ -12,7 +12,7 @@ fn backend_to_token_stream(backend: &BackendType) -> proc_macro2::TokenStream {
         BackendType::Rocm => quote! { burn::backend::Rocm<f32> },
         BackendType::Metal => quote! { burn::backend::Metal<f32> },
         BackendType::Vulkan => quote! { burn::backend::Vulkan<f32> },
-        BackendType::CPU => quote! { burn::backend::CPU<f32> },
+        BackendType::Cpu => quote! { burn::backend::Cpu<f32> },
         BackendType::Candle => quote! { use burn::backend::candle::Candle<f32> },
     }
 }
@@ -32,7 +32,7 @@ pub fn get_burn_feature_flags(backend: &BackendType) -> Vec<&'static str> {
         BackendType::Rocm => vec!["rocm"],
         BackendType::Metal => vec!["metal"],
         BackendType::Vulkan => vec!["vulkan"],
-        BackendType::CPU => vec!["cpu"],
+        BackendType::Cpu => vec!["cpu"],
         BackendType::Candle => vec!["candle"],
     }
 }
