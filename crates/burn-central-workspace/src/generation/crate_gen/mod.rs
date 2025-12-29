@@ -220,13 +220,14 @@ fn generate_main_rs(
         })
         .collect();
 
-    let recursion_limit = if [BackendType::Wgpu, BackendType::Metal].contains(main_backend) {
-        quote! {
-            #![recursion_limit = "256"]
-        }
-    } else {
-        quote! {}
-    };
+    let recursion_limit =
+        if [BackendType::Wgpu, BackendType::Metal, BackendType::Vulkan].contains(main_backend) {
+            quote! {
+                #![recursion_limit = "256"]
+            }
+        } else {
+            quote! {}
+        };
 
     let crate_name_str = syn::Ident::new(
         &user_crate_name.to_lowercase().replace('-', "_"),
