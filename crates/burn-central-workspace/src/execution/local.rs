@@ -388,6 +388,13 @@ impl<'a> LocalExecutor<'a> {
                 for message in stream.flatten() {
                     match message {
                         cargo_metadata::Message::CompilerArtifact(artifact) => {
+                            if let Some(ref reporter) = reporter_clone {
+                                let message = format!("Compiling: {}", artifact.package_id.repr);
+                                reporter.report_event(ExecutionEvent {
+                                    step: "build".to_string(),
+                                    message: Some(message),
+                                });
+                            }
                             if let Some(executable) = artifact.executable {
                                 let _ = binary_path_tx.send(executable);
                             }
