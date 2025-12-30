@@ -13,7 +13,7 @@ fn backend_to_token_stream(backend: &BackendType) -> proc_macro2::TokenStream {
         BackendType::Metal => quote! { burn::backend::Metal<f32> },
         BackendType::Vulkan => quote! { burn::backend::Vulkan<f32> },
         BackendType::Cpu => quote! { burn::backend::Cpu<f32> },
-        BackendType::Candle => quote! { use burn::backend::candle::Candle<f32> },
+        BackendType::Candle => quote! { burn::backend::candle::Candle<f32> },
     }
 }
 
