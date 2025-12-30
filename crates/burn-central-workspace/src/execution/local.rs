@@ -31,6 +31,8 @@ pub struct LocalExecutionConfig {
     pub function: String,
     /// Backend to use for execution
     pub backend: BackendType,
+    /// Specific devices to use (if any)
+    pub devices: Option<Vec<DeviceIdPair>>,
     /// Launch arguments
     pub args: serde_json::Value,
     /// Type of procedure to execute
@@ -47,7 +49,10 @@ struct BuildConfig {
     pub code_version: String,
 }
 
+pub type DeviceIdPair = (u16, u32);
+
 struct RunConfig {
+    pub devices: Option<Vec<DeviceIdPair>>,
     pub function: String,
     pub procedure_type: ProcedureType,
     pub args: serde_json::Value,
@@ -62,6 +67,7 @@ impl LocalExecutionConfig {
         api_endpoint: String,
         function: String,
         backend: BackendType,
+        devices: Option<Vec<DeviceIdPair>>,
         procedure_type: ProcedureType,
         code_version: String,
     ) -> Self {
@@ -70,6 +76,7 @@ impl LocalExecutionConfig {
             api_endpoint,
             function,
             backend,
+            devices,
             procedure_type,
             code_version,
             args: serde_json::Value::Null,
@@ -226,6 +233,7 @@ impl<'a> LocalExecutor<'a> {
         )?;
 
         let run_config = RunConfig {
+            devices: config.devices,
             function: config.function,
             procedure_type: config.procedure_type,
             args: config.args,
@@ -531,30 +539,32 @@ impl<'a> LocalExecutor<'a> {
         run_cmd.env("BURN_PROJECT_DIR", self.project.get_crate_path());
 
         let project = self.project.get_project();
-        run_cmd.args(["--namespace", &project.owner]);
-        run_cmd.args(["--project", &project.name]);
-        run_cmd.args(["--api-key", &config.api_key]);
-        run_cmd.args(["--endpoint", &config.api_endpoint]);
-
-        let args_str = serde_json::to_string(&config.args).map_err(|e| {
-            let error_msg = format!("Failed to serialize args: {}", e);
-            if let Some(ref reporter) = event_reporter {
-                reporter.report_event(ExecutionEvent {
-                    step: "execution".to_string(),
-                    message: Some(error_msg.clone()),
-                });
-            }
-            ExecutionError::RuntimeFailed(error_msg)
-        })?;
-        run_cmd.args(["--args", &args_str]);
 
         let run_kind = match config.procedure_type {
             ProcedureType::Training => "train",
             ProcedureType::Inference => "infer",
         };
 
-        run_cmd.arg(run_kind);
-        run_cmd.arg(&config.function);
+        let json_args = serde_json::to_string(&config.args).map_err(|e| {
+            ExecutionError::RuntimeFailed(format!("Failed to serialize function args: {}", e))
+        })?;
+
+        let runtime_args = RuntimeArgs {
+            devices: config.devices.clone(),
+            kind: run_kind.to_string(),
+            routine: config.function.clone(),
+            args: json_args,
+            burn_central: BurnCentralArgs {
+                namespace: project.owner.clone(),
+                project: project.name.clone(),
+                api_key: config.api_key.clone(),
+                endpoint: config.api_endpoint.clone(),
+            },
+        };
+
+        run_cmd.arg(serde_json::to_string(&runtime_args).map_err(|e| {
+            ExecutionError::RuntimeFailed(format!("Failed to serialize runtime args: {}", e))
+        })?);
 
         run_cmd
             .stdout(Stdio::piped())
@@ -702,4 +712,32 @@ impl<'a> LocalExecutor<'a> {
     pub fn list_inference_functions(&self) -> crate::Result<Vec<String>> {
         self.list_functions(ProcedureType::Inference)
     }
+}
+
+#[derive(Serialize)]
+pub struct BurnCentralArgs {
+    pub namespace: String,
+    pub project: String,
+    pub api_key: String,
+    pub endpoint: String,
+}
+
+#[derive(Serialize)]
+/// Arguments provided via CLI by the Burn Central CLI
+pub struct RuntimeArgs {
+    /// The device ids to use for the routine execution. If not provided, the default device will be
+    /// used.
+    pub devices: Option<Vec<DeviceIdPair>>,
+    /// The kind of routine to execute. It can be `training` or `inference`.
+    pub kind: String,
+    /// The name of the routine to execute. We pass the routine name here as the name might not be
+    /// the name of the function if the user decide to rename it using the `name` attribute in the
+    /// register macro.
+    pub routine: String,
+    /// JSON string representing the arguments to pass to the routine. The arguments pass here are
+    /// self define by the user. Value found in this field will be merge with the Config the user
+    /// is requesting using [Args] extractor in his training function.
+    pub args: String,
+    /// Burn Central configuration arguments.
+    pub burn_central: BurnCentralArgs,
 }

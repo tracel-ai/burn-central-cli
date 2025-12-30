@@ -240,12 +240,39 @@ fn generate_main_rs(
 
         use #crate_name_str::*;
 
+        pub fn select_devices<B: burn::tensor::backend::Backend>(
+            device_ids: impl IntoIterator<Item = (u16, u32)>,
+        ) -> Vec<B::Device> {
+            use burn::tensor::backend::{Device, DeviceId};
+
+            let devices = device_ids
+                .into_iter()
+                .map(|id| {
+                    <B::Device as Device>::from_id(DeviceId {
+                        type_id: id.0,
+                        index_id: id.1,
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            if devices.len() == 0 {
+                vec![#backend_default_device]
+            } else {
+                devices
+            }
+        }
+
         fn main() -> Result<(), String> {
             use burn_central::runtime::Executor;
 
             let runtime_args = burn_central::runtime::cli::parse_runtime_args();
 
-            let device = #backend_default_device;
+            let device_ids = runtime_args.devices;
+            let devices = if let Some(devices) = device_ids {
+                select_devices::<#_backend_type_name>(devices)
+            } else {
+                vec![#backend_default_device]
+            };
 
             let key = runtime_args.burn_central.api_key;
             let endpoint = runtime_args.burn_central.endpoint;
@@ -268,7 +295,7 @@ fn generate_main_rs(
                 .run(
                     runtime_args.kind.parse().unwrap(),
                     runtime_args.routine,
-                    [device],
+                    devices,
                     Some(runtime_args.args),
                 )
                 .map_err(|e| e.to_string())
@@ -297,18 +324,6 @@ pub fn create_crate(
         user_project_name.to_string(),
         "*".to_string(),
         user_project_dir.to_string(),
-        vec![],
-    ));
-    generated_crate.add_dependency(Dependency::new(
-        "clap".to_string(),
-        "*".to_string(),
-        None,
-        vec!["cargo".to_string()],
-    ));
-    generated_crate.add_dependency(Dependency::new(
-        "serde_json".to_string(),
-        "*".to_string(),
-        None,
         vec![],
     ));
 

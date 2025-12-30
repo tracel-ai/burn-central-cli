@@ -37,6 +37,20 @@ pub fn parse_key_val(s: &str) -> Result<(String, serde_json::Value), String> {
     Ok((key.to_string(), json_value))
 }
 
+/// Parse a x,y string into a tuple of (x,y)
+pub fn parse_devices(s: &str) -> Result<(u16, u32), String> {
+    let (backend_id_str, device_id_str) = s
+        .split_once(',')
+        .ok_or_else(|| format!("Invalid backend_id,device_id format: {}", s))?;
+    let backend_id = backend_id_str
+        .parse::<u16>()
+        .map_err(|_| format!("Invalid backend_id: {}", backend_id_str))?;
+    let device_id = device_id_str
+        .parse::<u32>()
+        .map_err(|_| format!("Invalid device_id: {}", device_id_str))?;
+    Ok((backend_id, device_id))
+}
+
 #[derive(Parser, Debug)]
 pub struct TrainingArgs {
     /// The training function to run. Annotate a training function with #[burn(training)] to register it.
@@ -44,6 +58,9 @@ pub struct TrainingArgs {
     /// Backend to use
     #[clap(short = 'b', long = "backend")]
     backend: Option<BackendType>,
+    /// Devices to use
+    #[clap(long = "devices", value_parser = parse_devices, value_hint = ValueHint::Other, value_delimiter = ' ', num_args = 1..)]
+    devices: Option<Vec<(u16, u32)>>,
     /// Config file path
     #[clap(short = 'c', long = "config")]
     args: Option<String>,
@@ -75,6 +92,7 @@ impl Default for TrainingArgs {
             code_version: None,
             compute_provider: None,
             backend: None,
+            devices: None,
         }
     }
 }
@@ -315,6 +333,7 @@ fn execute_locally(
 
     let executor = LocalExecutor::new(project);
     let backend = args.backend.unwrap_or_default();
+    let devices = args.devices;
 
     let config = LocalExecutionConfig::new(
         context
@@ -324,6 +343,7 @@ fn execute_locally(
         context.get_api_endpoint().to_string(),
         function.clone(),
         backend,
+        devices,
         ProcedureType::Training,
         code_version,
     )
