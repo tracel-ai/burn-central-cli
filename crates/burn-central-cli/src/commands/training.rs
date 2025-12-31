@@ -20,7 +20,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::commands::package::package_sequence;
-use crate::helpers::require_linked_project;
+use crate::helpers::{require_linked_project, validate_project_exists_on_server};
 
 use crate::tools::terminal::Terminal;
 use crate::{context::CliContext, tools::terminal::BURN_ORANGE};
@@ -110,6 +110,10 @@ fn execute_remotely(
         .terminal()
         .command_title("Remote training execution");
 
+    let client = context.create_client()?;
+
+    validate_project_exists_on_server(context, project_ctx, &client)?;
+
     preload_functions(context, project_ctx)?;
 
     let bc_project = project_ctx.get_project();
@@ -141,7 +145,6 @@ fn execute_remotely(
         args: Some(launch_args.data),
     };
 
-    let client = context.create_client()?;
     let command = serde_json::to_string(&command)?;
     client
         .start_remote_job(
