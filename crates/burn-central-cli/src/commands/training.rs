@@ -58,7 +58,7 @@ pub struct TrainingArgs {
     /// Backend to use
     #[clap(short = 'b', long = "backend")]
     backend: Option<BackendType>,
-    /// Devices to use
+    /// Devices to use, e.g. --devices 0,0 0,1 for devices with type id 0 and index 0 and 1. The semantics of the type id and index depend on the selected backend. See Burn backend device documentation for more details.
     #[clap(long = "devices", value_parser = parse_devices, value_hint = ValueHint::Other, value_delimiter = ' ', num_args = 1..)]
     devices: Option<Vec<(u16, u32)>>,
     /// Config file path
