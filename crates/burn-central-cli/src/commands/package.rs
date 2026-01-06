@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::commands::init::ensure_git_repo_clean;
 use crate::context::CliContext;
-use crate::helpers::require_linked_project;
+use crate::helpers::{require_linked_project, validate_project_exists_on_server};
 use anyhow::Context;
 use burn_central_client::Client;
 use burn_central_client::request::{
@@ -39,6 +39,8 @@ pub fn package_sequence(
     }
 
     let client = context.create_client()?;
+
+    validate_project_exists_on_server(context, project, &client)?;
     let package = package(
         &project.burn_dir().artifacts_dir(),
         project.get_crate_name(),

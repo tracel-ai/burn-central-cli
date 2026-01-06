@@ -1,6 +1,7 @@
 //! Project helpers for CLI operations
 
 use crate::context::CliContext;
+use burn_central_client::Client;
 use burn_central_workspace::{CrateInfo, ProjectContext, tools::cargo};
 
 /// Check if current directory contains a Rust project (has Cargo.toml)
@@ -122,4 +123,40 @@ pub fn can_initialize_project(context: &CliContext, force: bool) -> anyhow::Resu
     }
 
     Ok(true)
+}
+
+/// Validate that the linked project exists on Burn Central server
+pub fn validate_project_exists_on_server(
+    context: &CliContext,
+    project: &ProjectContext,
+    client: &Client,
+) -> anyhow::Result<()> {
+    let bc_project = project.get_project();
+
+    match client.get_project(&bc_project.owner, &bc_project.name) {
+        Ok(_) => Ok(()),
+        Err(e) if e.is_not_found() => {
+            context.terminal().print_err(&format!(
+                "Project {}/{} does not exist on Burn Central.",
+                &bc_project.owner, &bc_project.name
+            ));
+            context
+                .terminal()
+                .print("The linked project may have been deleted or renamed on the server.");
+            context
+                .terminal()
+                .print("Run 'burn init --force' to reinitialize and link to a different project.");
+            anyhow::bail!(
+                "Project {}/{} not found on Burn Central",
+                &bc_project.owner,
+                &bc_project.name
+            )
+        }
+        Err(e) => {
+            context
+                .terminal()
+                .print_err(&format!("Failed to verify project on Burn Central: {}", e));
+            anyhow::bail!("Failed to verify project exists on server: {}", e)
+        }
+    }
 }
