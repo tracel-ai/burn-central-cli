@@ -8,6 +8,12 @@ fn backend_to_token_stream(backend: &BackendType) -> proc_macro2::TokenStream {
         BackendType::Wgpu => quote! { burn::backend::Wgpu<f32, i32> },
         BackendType::Tch => quote! { burn::backend::libtorch::LibTorch<f32> },
         BackendType::Ndarray => quote! { burn::backend::ndarray::NdArray<f32> },
+        BackendType::Cuda => quote! { burn::backend::Cuda<f32> },
+        BackendType::Rocm => quote! { burn::backend::Rocm<f32> },
+        BackendType::Metal => quote! { burn::backend::Metal<f32> },
+        BackendType::Vulkan => quote! { burn::backend::Vulkan<f32> },
+        BackendType::Cpu => quote! { burn::backend::Cpu<f32> },
+        BackendType::Candle => quote! { burn::backend::candle::Candle<f32> },
     }
 }
 
@@ -22,6 +28,12 @@ pub fn get_burn_feature_flags(backend: &BackendType) -> Vec<&'static str> {
         BackendType::Wgpu => vec!["wgpu"],
         BackendType::Tch => vec!["tch"],
         BackendType::Ndarray => vec!["ndarray"],
+        BackendType::Cuda => vec!["cuda"],
+        BackendType::Rocm => vec!["rocm"],
+        BackendType::Metal => vec!["metal"],
+        BackendType::Vulkan => vec!["vulkan"],
+        BackendType::Cpu => vec!["cpu"],
+        BackendType::Candle => vec!["candle"],
     }
 }
 

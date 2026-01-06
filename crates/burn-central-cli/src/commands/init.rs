@@ -5,7 +5,7 @@ use anyhow::Context;
 use burn_central_client::Client;
 use burn_central_client::response::ProjectResponse;
 use burn_central_workspace::tools::git;
-use burn_central_workspace::{BurnCentralProject, ProjectContext, ProjectPath};
+use burn_central_workspace::{BurnCentralProject, ProjectContext};
 use clap::Args;
 
 #[derive(Args, Debug)]
@@ -51,7 +51,7 @@ pub fn prompt_init(context: &CliContext, client: &Client) -> anyhow::Result<()> 
         ProjectKind::User => user.namespace.as_str(),
         ProjectKind::Organization(org_name) => org_name.as_str(),
     };
-    let project_path = match client.get_project(owner_name, &project_name) {
+    let project_info = match client.get_project(owner_name, &project_name) {
         Ok(project) => handle_existing_project(&project)?,
         Err(e) if e.is_not_found() => {
             create_new_project(client, project_owner.clone(), &project_name)?
@@ -62,14 +62,8 @@ pub fn prompt_init(context: &CliContext, client: &Client) -> anyhow::Result<()> 
         }
     };
 
-    let project_name = project_path.project_name();
-    let owner_name = project_path.owner_name();
-
     ProjectContext::init(
-        BurnCentralProject {
-            name: project_name.to_string(),
-            owner: owner_name.to_string(),
-        },
+        project_info,
         &crate_info.get_manifest_path(),
         &context.get_burn_dir_name(),
     )
@@ -144,7 +138,7 @@ pub fn prompt_project_name(crate_name: &str) -> anyhow::Result<String> {
     Ok(input)
 }
 
-fn handle_existing_project(project: &ProjectResponse) -> anyhow::Result<ProjectPath> {
+fn handle_existing_project(project: &ProjectResponse) -> anyhow::Result<BurnCentralProject> {
     let confirmed = cliclack::confirm(format!(
         "Project \"{}\" already exists under owner \"{}\". Do you want to link it?",
         project.project_name, project.namespace_name
@@ -152,10 +146,10 @@ fn handle_existing_project(project: &ProjectResponse) -> anyhow::Result<ProjectP
     .interact()?;
 
     if confirmed {
-        Ok(ProjectPath::new(
-            project.namespace_name.clone(),
-            project.project_name.clone(),
-        ))
+        Ok(BurnCentralProject {
+            owner: project.namespace_name.clone(),
+            name: project.project_name.clone(),
+        })
     } else {
         cliclack::outro_cancel("Project initialization cancelled")?;
         Err(anyhow::anyhow!("Project initialization cancelled by user"))
@@ -172,7 +166,7 @@ fn create_new_project(
     client: &Client,
     project_kind: ProjectKind,
     name: &str,
-) -> anyhow::Result<ProjectPath> {
+) -> anyhow::Result<BurnCentralProject> {
     let description = cliclack::input("Enter the project description (default empty)")
         .required(false)
         .interact::<String>()?;
@@ -190,10 +184,10 @@ fn create_new_project(
     };
 
     match created_project_path {
-        Ok(project) => Ok(ProjectPath::new(
-            project.namespace_name,
-            project.project_name,
-        )),
+        Ok(project) => Ok(BurnCentralProject {
+            owner: project.namespace_name,
+            name: project.project_name,
+        }),
         Err(e) => {
             cliclack::outro_cancel(format!("Failed to create project: {e}"))?;
             Err(anyhow::anyhow!("Failed to create project: {}", e))

@@ -46,6 +46,12 @@ pub enum BackendType {
     Wgpu,
     Tch,
     Ndarray,
+    Cuda,
+    Rocm,
+    Metal,
+    Vulkan,
+    Cpu,
+    Candle,
 }
 
 /// Error types specific to execution
