@@ -64,6 +64,10 @@ impl Terminal {
             .expect("To be able to print message");
     }
 
+    pub fn finalize_info(&self, msg: &str) {
+        cliclack::outro(msg).expect("To be able to print message");
+    }
+
     pub fn cancel_finalize(&self, msg: &str) {
         cliclack::outro_cancel(console::style(format!(" {} ", msg)).black().on_red())
             .expect("To be able to print message");

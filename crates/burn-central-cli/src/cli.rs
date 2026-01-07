@@ -5,6 +5,7 @@ use crate::commands;
 use crate::commands::default_command;
 use crate::context::CliContext;
 use crate::tools::terminal::Terminal;
+use crate::version_checker::VersionChecker;
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -67,6 +68,12 @@ pub fn cli_main() {
 
     if let Err(e) = cli_res {
         terminal.cancel_finalize(&format!("{e}"));
+    }
+
+    if let Some(checker) = VersionChecker::new() {
+        if let Some(latest_version) = checker.check_for_updates() {
+            VersionChecker::print_update_notification(&latest_version, &terminal);
+        }
     }
 }
 

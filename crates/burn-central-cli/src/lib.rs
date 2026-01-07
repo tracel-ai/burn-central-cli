@@ -5,3 +5,4 @@ mod app_config;
 mod commands;
 mod context;
 mod helpers;
+mod version_checker;
