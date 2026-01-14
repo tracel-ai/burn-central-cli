@@ -214,13 +214,16 @@ pub fn package(artifacts_dir: &Path, target_package_name: &str) -> anyhow::Resul
         .args(pkgs.iter().map(|pkg| format!("-p{}", pkg.name)))
         .env("RUSTC_BOOTSTRAP", "1");
 
-    let package_status = package_cmd
-        .status()
+    let package_output = package_cmd
+        .output()
         .expect("Failed to run cargo package command");
 
-    if !package_status.success() {
+    if !package_output.status.success() {
+        let message = String::from_utf8_lossy(&package_output.stderr);
         print_err!("Failed to run cargo package command");
-        return Err(anyhow::anyhow!("Failed to run cargo package command"));
+        return Err(anyhow::anyhow!(
+            "Failed to run cargo package command:\n{message}",
+        ));
     }
 
     let packaged_artifacts_dir = artifacts_dir.join("package");

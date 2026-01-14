@@ -26,7 +26,6 @@ derive-new.workspace = true
 regex.workspace = true
 strum.workspace = true
 colored.workspace = true
-log.workspace = true
 chrono.workspace = true
 sha2.workspace = true
 toml_edit.workspace = true
@@ -44,6 +43,7 @@ serde-untagged.workspace = true
 serde_ignored.workspace = true
 pathdiff.workspace = true
 url.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 env_logger.workspace = true
