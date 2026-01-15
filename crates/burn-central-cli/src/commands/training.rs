@@ -409,7 +409,7 @@ fn get_function_to_run(
     let available_functions = discovery
         .get_function_references()
         .iter()
-        .map(|f| f.fn_name.to_lowercase())
+        .map(|f| f.routine_name.to_lowercase())
         .collect::<Vec<_>>();
 
     match function {

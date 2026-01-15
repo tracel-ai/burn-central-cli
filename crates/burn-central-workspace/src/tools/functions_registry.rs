@@ -27,7 +27,7 @@ impl FunctionRegistry {
         self.functions
             .iter()
             .filter_map(|(package, functions)| {
-                if functions.iter().any(|f| f.fn_name == function_name) {
+                if functions.iter().any(|f| f.routine_name == function_name) {
                     Some(package)
                 } else {
                     None

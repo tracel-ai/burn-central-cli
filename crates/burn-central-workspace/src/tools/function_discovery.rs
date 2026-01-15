@@ -64,12 +64,14 @@ impl FunctionMetadata {
 pub enum DiscoveryError {
     #[error("Failed to spawn cargo rustc process: {0}")]
     SpawnFailed(String),
-    #[error("Cargo rustc failed (status: {status})")]
-    CargoError { status: i32, diagnostics: String },
+    #[error("Cargo rustc failed for package '{package}' (status: {status})")]
+    CargoError {
+        package: String,
+        status: i32,
+        diagnostics: String,
+    },
     #[error("Function discovery was cancelled")]
     Cancelled,
-    #[error("IO error: {0}")]
-    IoError(#[from] std::io::Error),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -220,6 +222,7 @@ impl FunctionDiscovery {
             CancellableResult::Completed(status) => {
                 if !status.success() {
                     return Err(DiscoveryError::CargoError {
+                        package: package.name.clone(),
                         status: status.code().unwrap_or(-1),
                         diagnostics: errors_rx.try_iter().collect::<Vec<_>>().join("\n"),
                     });

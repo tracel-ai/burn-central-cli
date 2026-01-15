@@ -175,18 +175,40 @@ pub fn preload_functions(
     spinner.start("Discovering project functions...");
 
     let spinner_clone = spinner.clone();
-    let functions = project
-        .load_functions(Some(Arc::new(move |event: DiscoveryEvent| {
-            let mut message = format!(
-                "Discovering project functions: Checking {}",
-                event.package.name.bold()
-            );
-            if let Some(msg) = event.message {
-                message = format!("{} - {}", message, msg);
+    let functions =
+        project
+            .load_functions(Some(Arc::new(move |event: DiscoveryEvent| {
+                let mut message = format!(
+                    "Discovering project functions: Checking {}",
+                    event.package.name.bold()
+                );
+                if let Some(msg) = event.message {
+                    message = format!("{} - {}", message, msg);
+                }
+                spinner_clone.set_message(message);
+            })))
+            .inspect_err(|e| {
+                spinner.error("Failed to discover project functions.");
+                match e {
+                burn_central_workspace::tools::function_discovery::DiscoveryError::CargoError {
+                    package: _,
+                    status: _,
+                    diagnostics,
+                } => {
+                    context.terminal().print_err(&format!("Error: {}", e));
+
+                    let header = "=== RUSTC DIAGNOSTICS ===";
+                    let footer = "=".repeat(header.len());
+                    let message =
+                        format!("{}\n\n{}\n{}", header.yellow(), diagnostics, footer.yellow());
+                    context.terminal().print_err(&message);
+                }
+                _ => {
+                    context.terminal().print_err(&format!("Error: {}", e));
+                }
             }
-            spinner_clone.set_message(message);
-        })))
-        .context("Function discovery failed")?;
+            })
+            .context("Function discovery failed")?;
 
     spinner.stop(format!(
         "Discovered {} functions.",
