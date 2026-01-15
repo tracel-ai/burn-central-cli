@@ -8,7 +8,7 @@ use std::path::Path;
 
 pub fn get_last_commit_hash() -> anyhow::Result<String> {
     let repo = gix::discover(".")?;
-    let last_commit = repo.head()?.peel_to_commit_in_place()?.id();
+    let last_commit = repo.head()?.peel_to_commit()?.id();
 
     Ok(last_commit.to_string())
 }

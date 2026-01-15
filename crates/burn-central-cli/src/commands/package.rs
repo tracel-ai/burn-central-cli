@@ -44,7 +44,13 @@ pub fn package_sequence(
     let package = package(
         &project.burn_dir().artifacts_dir(),
         project.get_crate_name(),
-    )?;
+    )
+    .map_err(|e| {
+        context
+            .terminal()
+            .print_err(&format!("Error during packaging: {}", e));
+        anyhow::anyhow!("Failed to package project")
+    })?;
 
     let registry = project.load_functions()?;
 
