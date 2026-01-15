@@ -1,5 +1,6 @@
 pub mod compute_provider;
 mod entity;
+pub mod event;
 pub mod execution;
 mod generation;
 pub mod logging;

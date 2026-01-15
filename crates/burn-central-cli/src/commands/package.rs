@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use crate::commands::init::ensure_git_repo_clean;
 use crate::context::CliContext;
-use crate::helpers::{require_linked_project, validate_project_exists_on_server};
+use crate::helpers::{
+    preload_functions, require_linked_project, validate_project_exists_on_server,
+};
 use anyhow::Context;
 use burn_central_client::Client;
 use burn_central_client::request::{
@@ -10,6 +12,7 @@ use burn_central_client::request::{
 };
 use burn_central_workspace::ProjectContext;
 use burn_central_workspace::tools::cargo::package::{PackagedCrateData, package};
+use burn_central_workspace::tools::functions_registry::FunctionRegistry;
 use burn_central_workspace::tools::git::is_repo_dirty;
 use clap::Args;
 
@@ -21,7 +24,8 @@ pub struct PackageArgs {
 
 pub(crate) fn handle_command(args: PackageArgs, context: CliContext) -> anyhow::Result<()> {
     let project = require_linked_project(&context)?;
-    let version = package_sequence(&context, &project, args.allow_dirty)?;
+
+    let version = package_sequence(&context, &project, None, args.allow_dirty)?;
     context
         .terminal()
         .print_success(&format!("New project version uploaded: {version}"));
@@ -32,6 +36,7 @@ pub(crate) fn handle_command(args: PackageArgs, context: CliContext) -> anyhow::
 pub fn package_sequence(
     context: &CliContext,
     project: &ProjectContext,
+    discovery: Option<&FunctionRegistry>,
     allow_dirty: bool,
 ) -> anyhow::Result<String> {
     if is_repo_dirty()? && !allow_dirty {
@@ -52,10 +57,14 @@ pub fn package_sequence(
         anyhow::anyhow!("Failed to package project")
     })?;
 
-    let registry = project.load_functions()?;
+    let discovery = if let Some(discovery) = discovery {
+        discovery
+    } else {
+        &preload_functions(context, project)?
+    };
 
     let code_metadata = BurnCentralCodeMetadataRequest {
-        functions: registry
+        functions: discovery
             .get_function_references()
             .iter()
             .map(|f| RegisteredFunctionRequest {

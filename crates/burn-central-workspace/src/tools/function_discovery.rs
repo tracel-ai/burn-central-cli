@@ -5,8 +5,11 @@
 use crate::execution::cancellable::{CancellableProcess, CancellableResult, CancellationToken};
 use quote::ToTokens;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::io::BufReader;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 
 const MAGIC: &str = "BCFN1|";
 const END: &str = "|END";
@@ -57,57 +60,105 @@ impl FunctionMetadata {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum DiscoveryError {
+    #[error("Failed to spawn cargo rustc process: {0}")]
+    SpawnFailed(String),
+    #[error("Cargo rustc failed (status: {status})")]
+    CargoError { status: i32, diagnostics: String },
+    #[error("Function discovery was cancelled")]
+    Cancelled,
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PkgId {
+    pub name: String,
+    pub version: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct FunctionDiscovery {
     project_root: PathBuf,
-    target_dir: Option<PathBuf>,
-    manifest_path: Option<PathBuf>,
 }
+
+pub struct DiscoveryConfig {
+    pub packages: Vec<PkgId>,
+    pub target_dir: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+pub struct DiscoveryResult {
+    pub functions: HashMap<PkgId, Vec<FunctionMetadata>>,
+}
+
+pub struct DiscoveryEvent {
+    pub package: PkgId,
+    pub message: Option<String>,
+}
+
+type CheckEventReporter = dyn crate::event::Reporter<DiscoveryEvent>;
 
 impl FunctionDiscovery {
     pub fn new(project_root: impl Into<PathBuf>) -> Self {
         Self {
             project_root: project_root.into(),
-            target_dir: None,
-            manifest_path: None,
         }
-    }
-
-    pub fn with_target_dir(mut self, target_dir: impl Into<PathBuf>) -> Self {
-        self.target_dir = Some(target_dir.into());
-        self
-    }
-
-    pub fn with_manifest_path(mut self, manifest_path: impl Into<PathBuf>) -> Self {
-        self.manifest_path = Some(manifest_path.into());
-        self
     }
 
     /// Expand and extract with cancellation support
     pub fn discover_functions(
         &self,
+        discovery_config: &DiscoveryConfig,
         cancellation_token: &CancellationToken,
-    ) -> Result<Vec<FunctionMetadata>, String> {
-        let expanded = self.expand_with_cargo(cancellation_token)?;
-        if cancellation_token.is_cancelled() {
-            return Err("Function discovery was cancelled".to_string());
+        event_reporter: Option<Arc<CheckEventReporter>>,
+    ) -> Result<DiscoveryResult, DiscoveryError> {
+        let mut package_functions = HashMap::new();
+        for package in &discovery_config.packages {
+            let expanded = self.expand_with_cargo(
+                package,
+                discovery_config.target_dir.as_deref(),
+                cancellation_token,
+                event_reporter.clone(),
+            )?;
+
+            let functions = parse_expanded_output(&expanded);
+            package_functions
+                .entry(package.clone())
+                .or_insert_with(Vec::new)
+                .extend(functions);
         }
-        let functions = parse_expanded_output(&expanded);
-        Ok(functions)
+
+        let result = DiscoveryResult {
+            functions: package_functions,
+        };
+        Ok(result)
     }
 
-    fn expand_with_cargo(&self, cancellation_token: &CancellationToken) -> Result<String, String> {
+    fn expand_with_cargo(
+        &self,
+        package: &PkgId,
+        target_dir: Option<&Path>,
+        cancellation_token: &CancellationToken,
+        event_reporter: Option<Arc<CheckEventReporter>>,
+    ) -> Result<String, DiscoveryError> {
         let mut cmd = Command::new("cargo");
         cmd.current_dir(&self.project_root)
             .arg("rustc")
             .arg("--lib")
-            .arg("--profile=check");
+            .arg("--profile=check")
+            .arg("--message-format=json");
 
-        if let Some(mp) = &self.manifest_path {
-            cmd.arg("--manifest-path").arg(mp);
-        }
-        if let Some(td) = &self.target_dir {
-            cmd.arg("--target-dir").arg(td);
+        let spec = if let Some(ref version) = package.version {
+            format!("{}@{}", package.name, version)
+        } else {
+            package.name.to_string()
+        };
+        cmd.arg("-p").arg(spec);
+
+        if let Some(target_dir) = target_dir {
+            cmd.arg("--target-dir").arg(target_dir);
         }
 
         cmd.arg("--");
@@ -115,29 +166,73 @@ impl FunctionDiscovery {
         cmd.env("RUSTC_BOOTSTRAP", "1");
         cmd.env("RUST_LOG", "error");
 
-        let child = cmd
+        let mut child = cmd
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| format!("failed to spawn cargo rustc: {e}"))?;
+            .map_err(|e| DiscoveryError::SpawnFailed(e.to_string()))?;
+
+        let (output_tx, output_rx) = std::sync::mpsc::channel();
+        let (errors_tx, errors_rx) = std::sync::mpsc::channel();
+        // Capture and report stdout (cargo messages)
+        if let Some(stdout) = child.stdout.take() {
+            let reader = BufReader::new(stdout);
+            let package = package.clone();
+            let event_reporter = event_reporter.clone();
+
+            std::thread::spawn(move || {
+                let stream = cargo_metadata::Message::parse_stream(reader);
+                for message in stream.flatten() {
+                    match message {
+                        cargo_metadata::Message::CompilerMessage(msg) => {
+                            let rendered = msg.message.rendered.unwrap_or_default();
+                            if matches!(
+                                msg.message.level,
+                                cargo_metadata::diagnostic::DiagnosticLevel::Error
+                            ) {
+                                let _ = errors_tx.send(rendered);
+                            }
+                        }
+                        cargo_metadata::Message::CompilerArtifact(_artifact) => {
+                            if let Some(ref reporter) = event_reporter {
+                                reporter.report_event(DiscoveryEvent {
+                                    package: package.clone(),
+                                    message: Some(format!(
+                                        "Compiled artifact: {}",
+                                        _artifact.target.name
+                                    )),
+                                });
+                            }
+                        }
+                        cargo_metadata::Message::TextLine(line) => {
+                            let _ = output_tx.send(line);
+                        }
+                        _ => {}
+                    }
+                }
+            });
+        }
 
         let cancellable = CancellableProcess::new(child, cancellation_token.clone());
-        let result = cancellable.wait_with_output();
+        let result = cancellable.wait();
 
         match result {
-            CancellableResult::Completed(output) => {
-                if !output.status.success() {
-                    return Err(format!("cargo rustc failed (status {})", output.status));
+            CancellableResult::Completed(status) => {
+                if !status.success() {
+                    return Err(DiscoveryError::CargoError {
+                        status: status.code().unwrap_or(-1),
+                        diagnostics: errors_rx.try_iter().collect::<Vec<_>>().join("\n"),
+                    });
                 }
-                let expanded = String::from_utf8(output.stdout).map_err(|e| e.to_string())?;
+                let expanded = output_rx.try_iter().collect::<Vec<String>>().join("\n");
                 Ok(expanded)
             }
-            CancellableResult::Cancelled => Err("Function discovery was cancelled".to_string()),
+            CancellableResult::Cancelled => Err(DiscoveryError::Cancelled),
         }
     }
 }
 
-pub fn parse_expanded_output(expanded: &str) -> Vec<FunctionMetadata> {
+fn parse_expanded_output(expanded: &str) -> Vec<FunctionMetadata> {
     let bytes = expanded.as_bytes();
     let mut i = 0usize;
     let mut out = Vec::new();

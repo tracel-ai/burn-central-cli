@@ -9,7 +9,11 @@ use crate::{
     execution::{
         BackendType, BuildProfile, ExecutionError, ProcedureType, cancellable::CancellationToken,
     },
-    tools::{cargo, function_discovery::FunctionMetadata},
+    tools::{
+        cargo,
+        function_discovery::{DiscoveryEvent, FunctionMetadata},
+        functions_registry::FunctionRegistry,
+    },
 };
 use std::{
     io::{BufRead, BufReader},
@@ -192,11 +196,34 @@ impl<'a> LocalExecutor<'a> {
         cancel_token: &CancellationToken,
         event_reporter: Option<Arc<dyn ExecutionEventReporter>>,
     ) -> Result<LocalExecutionResult, ExecutionError> {
-        let functions = self
+        let dyn_reporter = event_reporter.clone().map(|reporter| {
+            Arc::new(move |e: DiscoveryEvent| {
+                let mut message = format!("Processing {}", e.package.name);
+                if let Some(msg) = e.message {
+                    message = format!("{}: {}", message, msg);
+                }
+                reporter.report_event(ExecutionEvent {
+                    step: "discovery".to_string(),
+                    message: Some(message),
+                });
+            }) as _
+        });
+
+        let discovery = self
             .project
-            .load_functions_cancellable(cancel_token)
-            .map_err(|e| ExecutionError::FunctionDiscovery(format!("{e}")))?;
-        let function_refs = functions.get_function_references();
+            .load_functions_cancellable(cancel_token, dyn_reporter)
+            .map_err(ExecutionError::FunctionDiscovery)?;
+        if let Some(r) = event_reporter.as_ref() {
+            r.report_event(ExecutionEvent {
+                step: "discovery".to_string(),
+                message: Some(format!(
+                    "Discovered {} functions",
+                    discovery.num_functions()
+                )),
+            })
+        };
+
+        let function_refs = discovery.get_function_references();
         self.validate_function(&config.function, function_refs)?;
 
         let build_config = BuildConfig {
@@ -209,6 +236,7 @@ impl<'a> LocalExecutor<'a> {
         let crate_dir = self.generate_executable_crate(
             crate_name,
             &build_config,
+            &discovery,
             cancel_token,
             event_reporter.clone(),
         )?;
@@ -251,10 +279,7 @@ impl<'a> LocalExecutor<'a> {
             .collect();
 
         if !function_names.contains(&function) {
-            return Err(ExecutionError::FunctionDiscovery(format!(
-                "Function '{}' not found. Available functions: {:?}",
-                function, function_names
-            )));
+            return Err(ExecutionError::FunctionNotFound(function.to_string()));
         }
 
         Ok(())
@@ -264,6 +289,7 @@ impl<'a> LocalExecutor<'a> {
         &self,
         crate_name: &str,
         config: &BuildConfig,
+        discovery: &FunctionRegistry,
         cancel_token: &CancellationToken,
         event_reporter: Option<Arc<dyn ExecutionEventReporter>>,
     ) -> Result<PathBuf, ExecutionError> {
@@ -278,17 +304,12 @@ impl<'a> LocalExecutor<'a> {
             });
         }
 
-        let functions = self
-            .project
-            .load_functions_cancellable(cancel_token)
-            .map_err(|e| ExecutionError::FunctionDiscovery(format!("{e}")))?;
-
         let generated_crate = crate::generation::crate_gen::create_crate(
             crate_name,
             self.project.get_crate_name(),
             self.project.get_crate_path().to_str().unwrap(),
             &config.backend,
-            functions.get_function_references(),
+            discovery.get_function_references(),
             self.project.get_current_package(),
         );
 
@@ -659,47 +680,5 @@ impl<'a> LocalExecutor<'a> {
                 Some(output),
             ))
         }
-    }
-
-    /// List available functions of a specific type
-    pub fn list_functions(&self, procedure_type: ProcedureType) -> crate::Result<Vec<String>> {
-        let functions = self.project.load_functions()?;
-        let filtered_functions: Vec<String> = functions
-            .get_function_references()
-            .iter()
-            .filter(|f| f.proc_type.to_lowercase() == procedure_type.to_string().to_lowercase())
-            .map(|f| f.routine_name.clone())
-            .collect();
-
-        Ok(filtered_functions)
-    }
-
-    /// List available functions of a specific type with cancellation support
-    pub fn list_functions_cancellable(
-        &self,
-        procedure_type: ProcedureType,
-        cancellation_token: &CancellationToken,
-    ) -> crate::Result<Vec<String>> {
-        let functions = self
-            .project
-            .load_functions_cancellable(cancellation_token)?;
-        let filtered_functions: Vec<String> = functions
-            .get_function_references()
-            .iter()
-            .filter(|f| f.proc_type.to_lowercase() == procedure_type.to_string().to_lowercase())
-            .map(|f| f.routine_name.clone())
-            .collect();
-
-        Ok(filtered_functions)
-    }
-
-    /// List all available training functions
-    pub fn list_training_functions(&self) -> crate::Result<Vec<String>> {
-        self.list_functions(ProcedureType::Training)
-    }
-
-    /// List all available inference functions
-    pub fn list_inference_functions(&self) -> crate::Result<Vec<String>> {
-        self.list_functions(ProcedureType::Inference)
     }
 }

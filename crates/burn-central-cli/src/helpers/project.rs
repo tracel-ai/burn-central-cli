@@ -1,8 +1,14 @@
 //! Project helpers for CLI operations
 
 use crate::context::CliContext;
+use anyhow::Context;
 use burn_central_client::Client;
-use burn_central_workspace::{CrateInfo, ProjectContext, tools::cargo};
+use burn_central_workspace::{
+    CrateInfo, ProjectContext,
+    tools::{cargo, function_discovery::DiscoveryEvent, functions_registry::FunctionRegistry},
+};
+use colored::Colorize;
+use std::sync::Arc;
 
 /// Check if current directory contains a Rust project (has Cargo.toml)
 pub fn is_rust_project() -> bool {
@@ -159,4 +165,32 @@ pub fn validate_project_exists_on_server(
             anyhow::bail!("Failed to verify project exists on server: {}", e)
         }
     }
+}
+
+pub fn preload_functions(
+    context: &CliContext,
+    project: &ProjectContext,
+) -> anyhow::Result<FunctionRegistry> {
+    let spinner = context.terminal().spinner();
+    spinner.start("Discovering project functions...");
+
+    let spinner_clone = spinner.clone();
+    let functions = project
+        .load_functions(Some(Arc::new(move |event: DiscoveryEvent| {
+            let mut message = format!(
+                "Discovering project functions: Checking {}",
+                event.package.name.bold()
+            );
+            if let Some(msg) = event.message {
+                message = format!("{} - {}", message, msg);
+            }
+            spinner_clone.set_message(message);
+        })))
+        .context("Function discovery failed")?;
+
+    spinner.stop(format!(
+        "Discovered {} functions.",
+        functions.get_function_references().len()
+    ));
+    Ok(functions)
 }
