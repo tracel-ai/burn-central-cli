@@ -4,6 +4,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     io::{Seek, stdin},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use colored::Colorize;
@@ -155,7 +156,17 @@ pub struct PackageResult {
     pub digest: String,
 }
 
-pub fn package(artifacts_dir: &Path, target_package_name: &str) -> anyhow::Result<PackageResult> {
+pub struct PackageEvent {
+    pub message: String,
+}
+
+type PackageEventReporter = dyn crate::event::Reporter<PackageEvent>;
+
+pub fn package(
+    artifacts_dir: &Path,
+    target_package_name: &str,
+    event_reporter: Arc<PackageEventReporter>,
+) -> anyhow::Result<PackageResult> {
     let cmd = cargo_metadata::MetadataCommand::new();
 
     let metadata = cmd.exec().expect("Failed to get cargo metadata");
@@ -177,12 +188,18 @@ pub fn package(artifacts_dir: &Path, target_package_name: &str) -> anyhow::Resul
     let workspace_toml =
         tools::cargo::toml::read_manifest(&workspace_toml_path, Some(&workspace_toml_path))?;
 
+    event_reporter.report_event(PackageEvent {
+        message: "Checking local packages".to_string(),
+    });
     print_info!("{}", "Checking local packages".green().bold());
 
     // find all local dependencies
     let deps = find_pkg_all_local_dependencies_pkgs(&root_dir, &own_pkg, &metadata)?;
     let pkgs = [vec![own_pkg], deps].concat();
 
+    event_reporter.report_event(PackageEvent {
+        message: format!("Resolved local dependencies ({})", pkgs.len()),
+    });
     print_info!(
         "{}",
         format!(
@@ -198,6 +215,9 @@ pub fn package(artifacts_dir: &Path, target_package_name: &str) -> anyhow::Resul
 
     let mut dsts = Vec::with_capacity(pkgs.len());
 
+    event_reporter.report_event(PackageEvent {
+        message: "Archiving project".to_string(),
+    });
     print_info!("{}", "Archiving project".green().bold());
 
     let mut package_cmd = std::process::Command::new("cargo");
@@ -212,6 +232,10 @@ pub fn package(artifacts_dir: &Path, target_package_name: &str) -> anyhow::Resul
         .args(["--target-dir", artifacts_dir.to_str().unwrap()])
         .args(pkgs.iter().map(|pkg| format!("-p{}", pkg.name)));
 
+    event_reporter.report_event(PackageEvent {
+        message: "Running cargo package command".to_string(),
+    });
+
     let package_output = package_cmd
         .output()
         .expect("Failed to run cargo package command");
@@ -224,7 +248,15 @@ pub fn package(artifacts_dir: &Path, target_package_name: &str) -> anyhow::Resul
         ));
     }
 
+    event_reporter.report_event(PackageEvent {
+        message: "Cargo package command completed successfully".to_string(),
+    });
+
     let packaged_artifacts_dir = artifacts_dir.join("package");
+    event_reporter.report_event(PackageEvent {
+        message: "Collecting packaged artifacts".to_string(),
+    });
+
     // get all .crate files in the artifacts directory
     let tarballs = std::fs::read_dir(&packaged_artifacts_dir)?
         .filter_map(|entry| {
@@ -250,6 +282,9 @@ pub fn package(artifacts_dir: &Path, target_package_name: &str) -> anyhow::Resul
         .expect("Failed to remove packaged artifacts directory");
 
     for pkg in &pkgs {
+        event_reporter.report_event(PackageEvent {
+            message: format!("Processing package metadata for {}", pkg.name),
+        });
         print_info!("  {} {}", "Packaging".green().bold(), pkg.name);
 
         let crate_deps = pkg
@@ -327,6 +362,10 @@ pub fn package(artifacts_dir: &Path, target_package_name: &str) -> anyhow::Resul
         });
     }
 
+    event_reporter.report_event(PackageEvent {
+        message: "Computing final checksum".to_string(),
+    });
+
     let final_checksum = {
         let mut hasher = Sha256::new();
         for dst in &dsts {
@@ -338,6 +377,13 @@ pub fn package(artifacts_dir: &Path, target_package_name: &str) -> anyhow::Resul
         crate_metadata: dsts,
         digest: final_checksum,
     };
+
+    event_reporter.report_event(PackageEvent {
+        message: format!(
+            "Packaging completed successfully. Total packages: {}",
+            result.crate_metadata.len()
+        ),
+    });
 
     Ok(result)
 }
