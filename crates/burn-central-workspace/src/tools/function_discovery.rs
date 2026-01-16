@@ -160,7 +160,8 @@ impl FunctionDiscovery {
             .arg("rustc")
             .arg("--lib")
             .arg("--profile=check")
-            .arg("--message-format=json");
+            .arg("--message-format=json")
+            .arg("--quiet");
 
         let spec = if let Some(ref version) = package.version {
             format!("{}@{}", package.name, version)
@@ -218,7 +219,6 @@ impl FunctionDiscovery {
                         }
                         cargo_metadata::Message::TextLine(line) => {
                             let _ = output_tx.send(line.clone());
-                            let _ = errors_tx.send(line);
                         }
                         _ => {}
                     }
@@ -228,17 +228,9 @@ impl FunctionDiscovery {
 
         if let Some(stderr) = child.stderr.take() {
             let reader = BufReader::new(stderr);
-            let package = package.clone();
-            let event_reporter = event_reporter.clone();
             let errors_tx = errors_tx.clone();
             std::thread::spawn(move || {
                 for line in reader.lines().flatten() {
-                    if let Some(ref reporter) = event_reporter {
-                        reporter.report_event(DiscoveryEvent {
-                            package: package.clone(),
-                            message: Some(format!("stderr: {}", line)),
-                        });
-                    }
                     let _ = errors_tx.send(line);
                 }
             });
