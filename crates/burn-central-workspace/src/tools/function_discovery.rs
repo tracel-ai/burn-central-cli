@@ -6,7 +6,7 @@ use crate::execution::cancellable::{CancellableProcess, CancellableResult, Cance
 use quote::ToTokens;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::BufReader;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -191,7 +191,7 @@ impl FunctionDiscovery {
             let reader = BufReader::new(stdout);
             let package = package.clone();
             let event_reporter = event_reporter.clone();
-
+            let errors_tx = errors_tx.clone();
             std::thread::spawn(move || {
                 let stream = cargo_metadata::Message::parse_stream(reader);
                 for message in stream.flatten() {
@@ -221,6 +221,24 @@ impl FunctionDiscovery {
                         }
                         _ => {}
                     }
+                }
+            });
+        }
+
+        if let Some(stderr) = child.stderr.take() {
+            let reader = BufReader::new(stderr);
+            let package = package.clone();
+            let event_reporter = event_reporter.clone();
+            let errors_tx = errors_tx.clone();
+            std::thread::spawn(move || {
+                for line in reader.lines().flatten() {
+                    if let Some(ref reporter) = event_reporter {
+                        reporter.report_event(DiscoveryEvent {
+                            package: package.clone(),
+                            message: Some(format!("stderr: {}", line)),
+                        });
+                    }
+                    let _ = errors_tx.send(line);
                 }
             });
         }
