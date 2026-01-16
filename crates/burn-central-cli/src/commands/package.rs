@@ -57,7 +57,7 @@ pub fn package_sequence(
     let spinner_clone = spinner.clone();
     let package = package(
         &project.burn_dir().artifacts_dir(),
-        project.get_crate_name(),
+        project.get_workspace_name(),
         Arc::new(move |msg: PackageEvent| {
             spinner_clone.set_message(msg.message);
         }),
@@ -80,14 +80,17 @@ pub fn package_sequence(
 
     let code_metadata = BurnCentralCodeMetadataRequest {
         functions: discovery
-            .get_function_references()
-            .iter()
-            .map(|f| RegisteredFunctionRequest {
-                mod_path: f.mod_path.clone(),
-                fn_name: f.fn_name.clone(),
-                proc_type: f.proc_type.clone(),
-                code: f.get_function_code(),
-                routine: f.routine_name.clone(),
+            .get_functions()
+            .into_iter()
+            .map(|f| {
+                let code = f.get_function_code();
+                RegisteredFunctionRequest {
+                    mod_path: f.mod_path,
+                    fn_name: f.fn_name,
+                    proc_type: f.proc_type,
+                    code,
+                    routine: f.routine_name,
+                }
             })
             .collect(),
     };
@@ -97,7 +100,7 @@ pub fn package_sequence(
         &client,
         &bc_project.owner,
         &bc_project.name,
-        project.get_crate_name(),
+        project.get_workspace_name(),
         code_metadata,
         package.crate_metadata,
         &package.digest,

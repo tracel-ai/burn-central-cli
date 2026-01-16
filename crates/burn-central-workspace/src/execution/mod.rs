@@ -77,6 +77,9 @@ pub enum ExecutionError {
     #[error("Function '{0}' not found.")]
     FunctionNotFound(String),
 
+    #[error("Package '{0}' not found.")]
+    PackageNotFound(String),
+
     #[error("Execution cancelled")]
     Cancelled,
 }

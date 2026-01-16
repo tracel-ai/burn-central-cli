@@ -54,20 +54,20 @@ impl std::fmt::Display for ProjectContextError {
 }
 
 pub struct ProjectContext {
-    pub crate_info: CrateInfo,
+    pub workspace_info: WorkspaceInfo,
     pub build_profile: String,
     pub burn_dir: BurnDir,
     pub project: BurnCentralProject,
     function_registry: Mutex<FunctionRegistry>,
 }
 
-pub struct CrateInfo {
-    pub user_crate_name: String,
-    pub user_crate_dir: PathBuf,
+pub struct WorkspaceInfo {
+    pub workspace_name: String,
+    pub workspace_root: PathBuf,
     pub metadata: cargo_metadata::Metadata,
 }
 
-impl CrateInfo {
+impl WorkspaceInfo {
     pub fn load_from_path(manifest_path: &Path) -> Result<Self, ProjectContextError> {
         if !manifest_path.is_file() {
             return Err(ProjectContextError::new(
@@ -79,40 +79,6 @@ impl CrateInfo {
                 None,
             ));
         }
-        let toml_str = std::fs::read_to_string(manifest_path).expect("Cargo.toml should exist");
-        let manifest_document = toml::de::from_str::<toml::Value>(&toml_str).map_err(|e| {
-            ProjectContextError::new(
-                format!(
-                    "Failed to parse Cargo.toml at '{}': {}",
-                    manifest_path.display(),
-                    e
-                ),
-                ErrorKind::Parsing,
-                Some(anyhow::anyhow!(e)),
-            )
-        })?;
-
-        if manifest_document.get("package").is_none() {
-            return Err(ProjectContextError::new(
-                format!(
-                    "Cargo.toml at '{}' does not include a [package] section",
-                    manifest_path.display()
-                ),
-                ErrorKind::InvalidPackage,
-                None,
-            ));
-        }
-
-        let user_crate_name = manifest_document["package"]["name"]
-            .as_str()
-            .expect("Package name should exist")
-            .to_string();
-
-        let user_crate_dir = manifest_path
-            .parent()
-            .expect("Project directory should exist")
-            .to_path_buf();
-
         let metadata = cargo_metadata::MetadataCommand::new()
             .manifest_path(manifest_path)
             .no_deps()
@@ -129,40 +95,68 @@ impl CrateInfo {
                 )
             })?;
 
-        let package = metadata
-            .packages
-            .iter()
-            .find(|pkg| pkg.name.to_string() == user_crate_name)
-            .ok_or_else(|| {
+        let workspace_root = metadata.workspace_root.clone().into_std_path_buf();
+
+        // Determine workspace name from workspace Cargo.toml or directory name
+        let workspace_toml_path = workspace_root.join("Cargo.toml");
+        let workspace_name = if workspace_toml_path.exists() {
+            let toml_str = std::fs::read_to_string(&workspace_toml_path).map_err(|e| {
                 ProjectContextError::new(
                     format!(
-                        "Failed to find package '{}' in cargo metadata",
-                        user_crate_name
+                        "Failed to read workspace Cargo.toml at '{}': {}",
+                        workspace_toml_path.display(),
+                        e
                     ),
-                    ErrorKind::InvalidPackage,
-                    None,
+                    ErrorKind::Parsing,
+                    Some(anyhow::anyhow!(e)),
                 )
             })?;
 
-        // ensure that the package has a lib target
-        package
-            .targets
-            .iter()
-            .find(|target| target.kind.contains(&cargo_metadata::TargetKind::Lib))
-            .ok_or_else(|| {
+            let workspace_document = toml::de::from_str::<toml::Value>(&toml_str).map_err(|e| {
                 ProjectContextError::new(
                     format!(
-                        "Package '{}' does not have a library target",
-                        user_crate_name
+                        "Failed to parse workspace Cargo.toml at '{}': {}",
+                        workspace_toml_path.display(),
+                        e
                     ),
-                    ErrorKind::InvalidPackage,
-                    None,
+                    ErrorKind::Parsing,
+                    Some(anyhow::anyhow!(e)),
                 )
             })?;
 
-        Ok(CrateInfo {
-            user_crate_name,
-            user_crate_dir,
+            // Try to get name from workspace.package.name or package.name
+            workspace_document
+                .get("workspace")
+                .and_then(|ws| ws.get("package"))
+                .and_then(|pkg| pkg.get("name"))
+                .and_then(|name| name.as_str())
+                .or_else(|| {
+                    workspace_document
+                        .get("package")
+                        .and_then(|pkg| pkg.get("name"))
+                        .and_then(|name| name.as_str())
+                })
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| {
+                    // Fallback to directory name
+                    workspace_root
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("workspace")
+                        .to_string()
+                })
+        } else {
+            // Fallback to directory name if workspace Cargo.toml doesn't exist
+            workspace_root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("workspace")
+                .to_string()
+        };
+
+        Ok(WorkspaceInfo {
+            workspace_name,
+            workspace_root,
             metadata,
         })
     }
@@ -172,18 +166,20 @@ impl CrateInfo {
     }
 
     pub fn get_manifest_path(&self) -> PathBuf {
-        self.user_crate_dir.join(PathBuf::from("Cargo.toml"))
+        self.workspace_root.join(PathBuf::from("Cargo.toml"))
     }
 }
 
 impl ProjectContext {
-    pub fn load_crate_info(manifest_path: &Path) -> Result<CrateInfo, ProjectContextError> {
-        CrateInfo::load_from_path(manifest_path)
+    pub fn load_workspace_info(manifest_path: &Path) -> Result<WorkspaceInfo, ProjectContextError> {
+        WorkspaceInfo::load_from_path(manifest_path)
     }
 
     pub fn load(manifest_path: &Path, burn_dir_name: &str) -> Result<Self, ProjectContextError> {
-        let crate_info = CrateInfo::load_from_path(manifest_path)?;
-        let burn_dir_root = crate_info.user_crate_dir.join(PathBuf::from(burn_dir_name));
+        let workspace_info = WorkspaceInfo::load_from_path(manifest_path)?;
+        let burn_dir_root = workspace_info
+            .workspace_root
+            .join(PathBuf::from(burn_dir_name));
         let burn_dir = BurnDir::new(burn_dir_root);
         burn_dir.init().map_err(|e| {
             ProjectContextError::new(
@@ -211,7 +207,7 @@ impl ProjectContext {
             })?;
 
         Ok(Self {
-            crate_info,
+            workspace_info,
             build_profile: "release".to_string(),
             burn_dir,
             project,
@@ -224,9 +220,11 @@ impl ProjectContext {
         manifest_path: &Path,
         burn_dir_name: &str,
     ) -> Result<Self, ProjectContextError> {
-        let crate_info = CrateInfo::load_from_path(manifest_path)?;
+        let workspace_info = WorkspaceInfo::load_from_path(manifest_path)?;
 
-        let burn_dir_root = crate_info.user_crate_dir.join(PathBuf::from(burn_dir_name));
+        let burn_dir_root = workspace_info
+            .workspace_root
+            .join(PathBuf::from(burn_dir_name));
         let burn_dir = BurnDir::new(burn_dir_root);
         burn_dir.init().map_err(|e| {
             ProjectContextError::new(
@@ -245,7 +243,7 @@ impl ProjectContext {
         })?;
 
         Ok(Self {
-            crate_info,
+            workspace_info,
             build_profile: "release".to_string(),
             burn_dir,
             project: project.clone(),
@@ -254,9 +252,11 @@ impl ProjectContext {
     }
 
     pub fn unlink(manifest_path: &Path, burn_dir_name: &str) -> Result<(), ProjectContextError> {
-        let crate_info = CrateInfo::load_from_path(manifest_path)?;
+        let workspace_info = WorkspaceInfo::load_from_path(manifest_path)?;
 
-        let burn_dir_root = crate_info.user_crate_dir.join(PathBuf::from(burn_dir_name));
+        let burn_dir_root = workspace_info
+            .workspace_root
+            .join(PathBuf::from(burn_dir_name));
         let burn_dir = BurnDir::new(burn_dir_root);
 
         std::fs::remove_dir_all(burn_dir.root()).map_err(|e| {
@@ -274,20 +274,20 @@ impl ProjectContext {
         &self.project
     }
 
-    pub fn get_crate_name(&self) -> &str {
-        &self.crate_info.user_crate_name
+    pub fn get_workspace_name(&self) -> &str {
+        &self.workspace_info.workspace_name
     }
 
-    pub fn get_crate_path(&self) -> &Path {
-        &self.crate_info.user_crate_dir
+    pub fn get_workspace_path(&self) -> &Path {
+        &self.workspace_info.workspace_root
     }
 
     pub fn get_workspace_root(&self) -> &Path {
-        self.crate_info.metadata.workspace_root.as_std_path()
+        &self.workspace_info.workspace_root
     }
 
     pub fn get_manifest_path(&self) -> PathBuf {
-        self.crate_info.get_manifest_path()
+        self.workspace_info.get_manifest_path()
     }
 
     pub fn burn_dir(&self) -> &BurnDir {
@@ -295,7 +295,7 @@ impl ProjectContext {
     }
 
     pub fn cwd(&self) -> &Path {
-        &self.crate_info.user_crate_dir
+        &self.workspace_info.workspace_root
     }
 
     pub fn load_functions(
@@ -313,11 +313,10 @@ impl ProjectContext {
     ) -> Result<FunctionRegistry, DiscoveryError> {
         let mut functions = self.function_registry.lock().unwrap();
         if functions.is_empty() {
-            // TODO: later we will want to discover all workspace packages
-            // let workspace_pkgids = self.crate_info.metadata.workspace_members.clone();
-            let workspace_pkgids = [self.get_current_package().id.clone()];
+            // Discover all workspace packages
+            let workspace_pkgids = self.workspace_info.metadata.workspace_members.clone();
             let workspace_packages: Vec<_> = self
-                .crate_info
+                .workspace_info
                 .metadata
                 .packages
                 .iter()
@@ -359,12 +358,23 @@ impl ProjectContext {
         Ok(functions.clone())
     }
 
-    pub fn get_current_package(&self) -> &cargo_metadata::Package {
-        self.crate_info
+    pub fn get_workspace_packages(&self) -> Vec<&cargo_metadata::Package> {
+        self.workspace_info
             .metadata
             .packages
             .iter()
-            .find(|pkg| pkg.name.to_string() == self.crate_info.user_crate_name)
-            .expect("Current package should be found in metadata")
+            .filter(|pkg| {
+                self.workspace_info
+                    .metadata
+                    .workspace_members
+                    .contains(&pkg.id)
+            })
+            .collect()
+    }
+
+    pub fn find_package_by_name(&self, name: &str) -> Option<&cargo_metadata::Package> {
+        self.get_workspace_packages()
+            .into_iter()
+            .find(|pkg| pkg.name.as_str() == name)
     }
 }

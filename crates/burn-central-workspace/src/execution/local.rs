@@ -2,6 +2,7 @@
 //!
 //! This module provides the core functionality for building and executing functions locally.
 
+use cargo_metadata::Package;
 use serde::Serialize;
 
 use crate::{
@@ -12,7 +13,7 @@ use crate::{
     tools::{
         cargo,
         function_discovery::{DiscoveryEvent, FunctionMetadata},
-        functions_registry::FunctionRegistry,
+        functions_registry::FunctionId,
     },
 };
 use std::{
@@ -32,7 +33,7 @@ pub struct LocalExecutionConfig {
     /// The API endpoint to use
     pub api_endpoint: String,
     /// The function to execute
-    pub function: String,
+    pub function: FunctionId,
     /// Backend to use for execution
     pub backend: BackendType,
     /// Launch arguments
@@ -64,7 +65,7 @@ impl LocalExecutionConfig {
     pub fn new(
         api_key: String,
         api_endpoint: String,
-        function: String,
+        function: FunctionId,
         backend: BackendType,
         procedure_type: ProcedureType,
         code_version: String,
@@ -196,47 +197,27 @@ impl<'a> LocalExecutor<'a> {
         cancel_token: &CancellationToken,
         event_reporter: Option<Arc<dyn ExecutionEventReporter>>,
     ) -> Result<LocalExecutionResult, ExecutionError> {
-        let dyn_reporter = event_reporter.clone().map(|reporter| {
-            Arc::new(move |e: DiscoveryEvent| {
-                let mut message = format!("Processing {}", e.package.name);
-                if let Some(msg) = e.message {
-                    message = format!("{}: {}", message, msg);
-                }
-                reporter.report_event(ExecutionEvent {
-                    step: "discovery".to_string(),
-                    message: Some(message),
-                });
-            }) as _
-        });
+        // Discover functions in the workspace
+        let discovery = self.discover_functions(cancel_token, event_reporter.as_ref())?;
 
-        let discovery = self
-            .project
-            .load_functions_cancellable(cancel_token, dyn_reporter)
-            .map_err(ExecutionError::FunctionDiscovery)?;
-        if let Some(r) = event_reporter.as_ref() {
-            r.report_event(ExecutionEvent {
-                step: "discovery".to_string(),
-                message: Some(format!(
-                    "Discovered {} functions",
-                    discovery.num_functions()
-                )),
-            })
-        };
+        // Resolve which package contains the target function
+        let (target_package, target_package_functions) =
+            self.resolve_target_package(&discovery, &config.function)?;
 
-        let function_refs = discovery.get_function_references();
-        self.validate_function(&config.function, function_refs)?;
-
+        // Build configuration for compilation
         let build_config = BuildConfig {
             backend: config.backend,
             build_profile: config.build_profile,
             code_version: config.code_version,
         };
 
+        // Generate executable crate
         let crate_name = "burn_central_executable";
         let crate_dir = self.generate_executable_crate(
             crate_name,
             &build_config,
-            &discovery,
+            &target_package,
+            &target_package_functions,
             cancel_token,
             event_reporter.clone(),
         )?;
@@ -245,6 +226,7 @@ impl<'a> LocalExecutor<'a> {
             return Ok(LocalExecutionResult::cancelled());
         }
 
+        // Compile the executable
         let executable_path = self.build_executable(
             crate_name,
             &crate_dir,
@@ -253,43 +235,94 @@ impl<'a> LocalExecutor<'a> {
             event_reporter.clone(),
         )?;
 
+        if cancel_token.is_cancelled() {
+            return Ok(LocalExecutionResult::cancelled());
+        }
+
+        // Run the executable
         let run_config = RunConfig {
-            function: config.function,
+            function: config.function.function_name,
             procedure_type: config.procedure_type,
             args: config.args,
             api_key: config.api_key,
             api_endpoint: config.api_endpoint,
         };
-        if cancel_token.is_cancelled() {
-            return Ok(LocalExecutionResult::cancelled());
-        }
 
         self.run_executable(&executable_path, &run_config, cancel_token, event_reporter)
     }
 
-    /// Validate that the requested function exists and matches the procedure type
-    fn validate_function(
+    /// Discover all functions in the workspace packages
+    fn discover_functions(
         &self,
-        function: &str,
-        available_functions: &[FunctionMetadata],
-    ) -> Result<(), ExecutionError> {
-        let function_names: Vec<&str> = available_functions
-            .iter()
-            .map(|f| f.routine_name.as_str())
-            .collect();
+        cancel_token: &CancellationToken,
+        event_reporter: Option<&Arc<dyn ExecutionEventReporter>>,
+    ) -> Result<crate::tools::functions_registry::FunctionRegistry, ExecutionError> {
+        // Create a reporter adapter for discovery events
+        let discovery_reporter = event_reporter.map(|reporter| {
+            let reporter = Arc::clone(reporter);
+            Arc::new(move |e: DiscoveryEvent| {
+                let message = if let Some(msg) = e.message {
+                    format!("Processing {}: {}", e.package.name, msg)
+                } else {
+                    format!("Processing {}", e.package.name)
+                };
 
-        if !function_names.contains(&function) {
+                reporter.report_event(ExecutionEvent {
+                    step: "discovery".to_string(),
+                    message: Some(message),
+                });
+            }) as Arc<dyn crate::event::Reporter<DiscoveryEvent>>
+        });
+
+        // Perform function discovery
+        let discovery = self
+            .project
+            .load_functions_cancellable(cancel_token, discovery_reporter)
+            .map_err(ExecutionError::FunctionDiscovery)?;
+
+        // Report discovery completion
+        if let Some(reporter) = event_reporter {
+            reporter.report_event(ExecutionEvent {
+                step: "discovery".to_string(),
+                message: Some(format!(
+                    "Discovered {} functions",
+                    discovery.num_functions()
+                )),
+            });
+        }
+
+        Ok(discovery)
+    }
+
+    fn resolve_target_package(
+        &self,
+        discovery: &crate::tools::functions_registry::FunctionRegistry,
+        function: &FunctionId,
+    ) -> Result<(Package, Vec<FunctionMetadata>), ExecutionError> {
+        let packages_with_function = discovery.get_package_function_pair_by_id(function);
+
+        if packages_with_function.is_none() {
             return Err(ExecutionError::FunctionNotFound(function.to_string()));
         }
 
-        Ok(())
+        let (_, package) = packages_with_function.unwrap();
+
+        let all_functions = discovery
+            .get_package_functions(&package)
+            .expect(
+                "Package should have functions since it was found by find_packages_for_function_name",
+            )
+            .to_vec();
+
+        Ok((package, all_functions))
     }
 
     fn generate_executable_crate(
         &self,
         crate_name: &str,
         config: &BuildConfig,
-        discovery: &FunctionRegistry,
+        target_package: &Package,
+        functions: &[FunctionMetadata],
         cancel_token: &CancellationToken,
         event_reporter: Option<Arc<dyn ExecutionEventReporter>>,
     ) -> Result<PathBuf, ExecutionError> {
@@ -306,11 +339,11 @@ impl<'a> LocalExecutor<'a> {
 
         let generated_crate = crate::generation::crate_gen::create_crate(
             crate_name,
-            self.project.get_crate_name(),
-            self.project.get_crate_path().to_str().unwrap(),
+            &target_package.name,
+            target_package.manifest_path.parent().unwrap().as_str(),
             &config.backend,
-            discovery.get_function_references(),
-            self.project.get_current_package(),
+            functions,
+            target_package,
         );
 
         let mut cache = self.project.burn_dir().load_cache().map_err(|e| {
@@ -548,8 +581,6 @@ impl<'a> LocalExecutor<'a> {
         }
 
         let mut run_cmd = Command::new(executable_path);
-
-        run_cmd.env("BURN_PROJECT_DIR", self.project.get_crate_path());
 
         let project = self.project.get_project();
         run_cmd.args(["--namespace", &project.owner]);

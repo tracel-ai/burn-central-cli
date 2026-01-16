@@ -8,6 +8,7 @@ use burn_central_workspace::execution::local::ExecutionEvent;
 use burn_central_workspace::execution::local::ExecutionEventReporter;
 use burn_central_workspace::execution::local::LocalExecutionConfig;
 use burn_central_workspace::execution::local::LocalExecutor;
+use burn_central_workspace::tools::functions_registry::FunctionId;
 use burn_central_workspace::tools::functions_registry::FunctionRegistry;
 use clap::Parser;
 use clap::ValueHint;
@@ -24,8 +25,8 @@ use crate::commands::package::package_sequence;
 use crate::helpers::preload_functions;
 use crate::helpers::{require_linked_project, validate_project_exists_on_server};
 
+use crate::context::CliContext;
 use crate::tools::terminal::Terminal;
-use crate::{context::CliContext, tools::terminal::BURN_ORANGE};
 
 /// Parse a key=value string into a key-value pair
 pub fn parse_key_val(s: &str) -> Result<(String, serde_json::Value), String> {
@@ -90,15 +91,17 @@ pub(crate) fn handle_command(args: TrainingArgs, context: CliContext) -> anyhow:
     }
 }
 
-fn prompt_function(functions: Vec<String>) -> anyhow::Result<String> {
+fn prompt_function(discovery: &FunctionRegistry) -> anyhow::Result<FunctionId> {
+    let function_ids = discovery.get_function_ids();
     cliclack::select("Select the function you want to run")
         .items(
-            functions
+            function_ids
                 .into_iter()
-                .map(|func| (func.clone(), func.clone(), ""))
+                .map(|id| (id.clone(), id.function_name, id.package_name))
                 .collect::<Vec<_>>()
                 .as_slice(),
         )
+        .filter_mode()
         .interact()
         .map_err(anyhow::Error::from)
 }
@@ -142,7 +145,7 @@ fn execute_remotely(
     let launch_args = ExperimentConfig::load_config(args.args, args.overrides)?;
 
     let command = TrainingJobArgs {
-        function: function.clone(),
+        function: function.to_string(),
         backend: args.backend.unwrap_or_default(),
         args: Some(launch_args.data),
     };
@@ -163,6 +166,15 @@ fn execute_remotely(
             )
         })?;
 
+    context.terminal().print_success(&format!(
+        "Training job for function `{}` has been submitted to compute provider `{}`.",
+        function, compute_provider
+    ));
+
+    context
+        .terminal()
+        .finalize("Remote training execution queued successfully.");
+
     Ok(())
 }
 
@@ -175,8 +187,11 @@ struct TrainingReporter {
 }
 
 impl TrainingReporter {
-    pub fn new(terminal: Terminal) -> Self {
-        let multi_progress = terminal.multiprogress("Training Progress");
+    pub fn new(function: &FunctionId, terminal: Terminal) -> Self {
+        let multi_progress = terminal.multiprogress(&format!(
+            "Executing training function `{}`",
+            function.to_string().bold()
+        ));
         let main_progress = multi_progress.add(terminal.spinner());
 
         Self {
@@ -203,7 +218,7 @@ impl TrainingReporter {
 
             self.main_progress.set_message(format!(
                 "{} {} [{}]",
-                step.custom_color(BURN_ORANGE).bold(),
+                step.green().bold(),
                 current_message.trim(),
                 elapsed_time.dimmed()
             ));
@@ -320,10 +335,10 @@ fn execute_locally(
     )
     .with_args(args_json.data);
 
-    let reporter = Arc::new(TrainingReporter::new(context.terminal().clone()));
+    let reporter = Arc::new(TrainingReporter::new(&function, context.terminal().clone()));
     reporter.start(format!(
         "Running training function `{}`...",
-        function.custom_color(BURN_ORANGE).bold()
+        function.to_string().bold()
     ));
 
     let timer_cancel = Arc::new(AtomicBool::new(true));
@@ -405,31 +420,53 @@ fn execute_locally(
 fn get_function_to_run(
     function: Option<String>,
     discovery: &FunctionRegistry,
-) -> anyhow::Result<String> {
-    let available_functions = discovery
-        .get_function_references()
-        .iter()
-        .map(|f| f.routine_name.to_lowercase())
-        .collect::<Vec<_>>();
-
+) -> anyhow::Result<FunctionId> {
     match function {
         Some(function) => {
-            if !available_functions.contains(&function) {
+            let parsed_id = function.parse().map_err(|e: String| anyhow::anyhow!(e))?;
+            // First try as a qualified name (package::function)
+            if discovery.get_function_by_id(&parsed_id).is_some() {
+                return Ok(parsed_id);
+            }
+
+            let packages_functions = discovery.find_packages_for_function_name(&function);
+
+            if packages_functions.is_empty() {
                 return Err(anyhow::anyhow!(
                     "Function `{}` is not available. Available functions are: {:?}",
                     function,
-                    available_functions
+                    discovery
+                        .get_function_ids()
+                        .iter()
+                        .map(|id| id.to_string())
+                        .collect::<Vec<_>>()
                 ));
             }
-            Ok(function)
+
+            if packages_functions.len() == 1 {
+                let (_, package) = &packages_functions[0];
+                return Ok(FunctionId {
+                    package_name: package.name.to_string(),
+                    function_name: function,
+                });
+            }
+
+            return Err(anyhow::anyhow!(
+                "Function `{}` exists in multiple packages. Please specify the package using the format 'package::function'. Available: {:?}",
+                function,
+                packages_functions
+                    .iter()
+                    .map(|(_, pkg)| format!("{}::{}", pkg.name, function))
+                    .collect::<Vec<_>>()
+            ));
         }
         None => {
-            if available_functions.is_empty() {
+            if discovery.is_empty() {
                 return Err(anyhow::anyhow!(
                     "No training functions found in the project"
                 ));
             }
-            prompt_function(available_functions)
+            prompt_function(&discovery)
         }
     }
 }

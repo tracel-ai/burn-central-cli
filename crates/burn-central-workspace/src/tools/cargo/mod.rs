@@ -26,6 +26,7 @@ pub fn cargo_binary() -> OsString {
 pub fn try_locate_manifest() -> Option<std::path::PathBuf> {
     let output = command()
         .arg("locate-project")
+        .arg("--workspace")
         .output()
         .expect("Failed to run cargo locate-project");
     if !output.status.success() {

@@ -130,6 +130,16 @@ impl FunctionDiscovery {
                 .entry(package.clone())
                 .or_insert_with(Vec::new)
                 .extend(functions);
+
+            event_reporter.as_ref().map(|reporter| {
+                reporter.report_event(DiscoveryEvent {
+                    package: package.clone(),
+                    message: Some(format!(
+                        "Discovered {} functions",
+                        package_functions.get(package).map_or(0, |fns| fns.len()),
+                    )),
+                });
+            });
         }
 
         let result = DiscoveryResult {
