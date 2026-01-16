@@ -217,7 +217,8 @@ impl FunctionDiscovery {
                             }
                         }
                         cargo_metadata::Message::TextLine(line) => {
-                            let _ = output_tx.send(line);
+                            let _ = output_tx.send(line.clone());
+                            let _ = errors_tx.send(line);
                         }
                         _ => {}
                     }
