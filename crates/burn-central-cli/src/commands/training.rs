@@ -451,14 +451,14 @@ fn get_function_to_run(
                 });
             }
 
-            return Err(anyhow::anyhow!(
+            Err(anyhow::anyhow!(
                 "Function `{}` exists in multiple packages. Please specify the package using the format 'package::function'. Available: {:?}",
                 function,
                 packages_functions
                     .iter()
                     .map(|(_, pkg)| format!("{}::{}", pkg.name, function))
                     .collect::<Vec<_>>()
-            ));
+            ))
         }
         None => {
             if discovery.is_empty() {
@@ -466,7 +466,7 @@ fn get_function_to_run(
                     "No training functions found in the project"
                 ));
             }
-            prompt_function(&discovery)
+            prompt_function(discovery)
         }
     }
 }

@@ -131,7 +131,7 @@ impl FunctionDiscovery {
                 .or_insert_with(Vec::new)
                 .extend(functions);
 
-            event_reporter.as_ref().map(|reporter| {
+            if let Some(reporter) = event_reporter.as_ref() {
                 reporter.report_event(DiscoveryEvent {
                     package: package.clone(),
                     message: Some(format!(
@@ -139,7 +139,7 @@ impl FunctionDiscovery {
                         package_functions.get(package).map_or(0, |fns| fns.len()),
                     )),
                 });
-            });
+            }
         }
 
         let result = DiscoveryResult {
