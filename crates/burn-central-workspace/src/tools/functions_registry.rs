@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display, str::FromStr};
+use std::{collections::HashMap, fmt::Display};
 
 use cargo_metadata::Package;
 
@@ -10,27 +10,18 @@ pub struct FunctionId {
     pub function_name: String,
 }
 
-impl Display for FunctionId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}::{}", self.package_name, self.function_name)
+impl FunctionId {
+    pub fn new(package_name: &str, function_name: &str) -> Self {
+        Self {
+            package_name: package_name.to_string(),
+            function_name: function_name.to_string(),
+        }
     }
 }
 
-impl FromStr for FunctionId {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split("::").collect();
-        if parts.len() != 2 {
-            return Err(format!(
-                "Invalid FunctionId format: {}. Expected format is 'package_name::function_name'",
-                s
-            ));
-        }
-        Ok(FunctionId {
-            package_name: parts[0].to_string(),
-            function_name: parts[1].to_string(),
-        })
+impl Display for FunctionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}::{}", self.package_name, self.function_name)
     }
 }
 

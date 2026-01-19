@@ -42,13 +42,16 @@ pub fn parse_key_val(s: &str) -> Result<(String, serde_json::Value), String> {
 
 #[derive(Parser, Debug)]
 pub struct TrainingArgs {
+    /// The package name containing the training function
+    #[clap(short, long)]
+    package: Option<String>,
     /// The training function to run. Annotate a training function with #[burn(training)] to register it.
     function: Option<String>,
     /// Backend to use
     #[clap(short = 'b', long = "backend")]
     backend: Option<BackendType>,
-    /// Config file path
-    #[clap(short = 'c', long = "config")]
+    /// A JSON file containing argument overrides for the training function
+    #[clap(short = 'a', long = "args")]
     args: Option<String>,
     /// Batch override: e.g. --overrides a.b=3 x.y.z=true
     #[clap(long = "overrides", value_parser = parse_key_val, value_hint = ValueHint::Other, value_delimiter = ' ', num_args = 1..)]
@@ -60,11 +63,7 @@ pub struct TrainingArgs {
     )]
     code_version: Option<String>,
     /// The compute provider group name
-    #[clap(
-        long = "compute-provider",
-        short = 'p',
-        help = "The compute provider group name."
-    )]
+    #[clap(long = "compute-provider", help = "The compute provider group name.")]
     compute_provider: Option<String>,
 }
 
@@ -72,6 +71,7 @@ impl Default for TrainingArgs {
     /// Default config when running the cargo run command
     fn default() -> Self {
         Self {
+            package: None,
             function: None,
             args: None,
             overrides: vec![],
@@ -91,8 +91,7 @@ pub(crate) fn handle_command(args: TrainingArgs, context: CliContext) -> anyhow:
     }
 }
 
-fn prompt_function(discovery: &FunctionRegistry) -> anyhow::Result<FunctionId> {
-    let function_ids = discovery.get_function_ids();
+fn prompt_function(function_ids: Vec<FunctionId>) -> anyhow::Result<FunctionId> {
     cliclack::select("Select the function you want to run")
         .items(
             function_ids
@@ -125,7 +124,7 @@ fn execute_remotely(
     let compute_provider = args
         .compute_provider
         .context("Compute provider should be provided")?;
-    let function = get_function_to_run(args.function, &discovery)?;
+    let function = get_function_to_run(args.package, args.function, &discovery)?;
 
     let code_version = match args.code_version {
         Some(version) => {
@@ -145,7 +144,8 @@ fn execute_remotely(
     let launch_args = ExperimentConfig::load_config(args.args, args.overrides)?;
 
     let command = TrainingJobArgs {
-        function: function.to_string(),
+        package: function.package_name.clone(),
+        function: function.function_name.clone(),
         backend: args.backend.unwrap_or_default(),
         args: Some(launch_args.data),
     };
@@ -315,7 +315,11 @@ fn execute_locally(
 
     let discovery = preload_functions(context, project)?;
 
-    let function = get_function_to_run(args.function, &discovery)?;
+    let function = get_function_to_run(args.package, args.function, &discovery)
+        .inspect_err(|e| {
+            context.terminal().print_err(&e.to_string());
+        })
+        .with_context(|| "Failed to determine the training function to run.")?;
 
     let code_version = package_sequence(context, project, Some(&discovery), false)?;
 
@@ -418,55 +422,83 @@ fn execute_locally(
 }
 
 fn get_function_to_run(
+    package: Option<String>,
     function: Option<String>,
     discovery: &FunctionRegistry,
 ) -> anyhow::Result<FunctionId> {
-    match function {
-        Some(function) => {
-            let parsed_id = function.parse().map_err(|e: String| anyhow::anyhow!(e))?;
-            // First try as a qualified name (package::function)
-            if discovery.get_function_by_id(&parsed_id).is_some() {
-                return Ok(parsed_id);
+    match (package, function) {
+        (Some(package_name), Some(function_name)) => {
+            let function_id = FunctionId {
+                package_name: package_name.clone(),
+                function_name: function_name.clone(),
+            };
+
+            if discovery.get_function_by_id(&function_id).is_some() {
+                return Ok(function_id);
             }
 
-            let packages_functions = discovery.find_packages_for_function_name(&function);
+            let error_msg = format!(
+                "Function `{}` not found in package `{}`.",
+                function_name, package_name,
+            );
+            Err(anyhow::anyhow!(error_msg))
+        }
+        (None, Some(function_name)) => {
+            let packages_functions = discovery.find_packages_for_function_name(&function_name);
 
             if packages_functions.is_empty() {
-                return Err(anyhow::anyhow!(
-                    "Function `{}` is not available. Available functions are: {:?}",
-                    function,
-                    discovery
-                        .get_function_ids()
-                        .iter()
-                        .map(|id| id.to_string())
-                        .collect::<Vec<_>>()
-                ));
+                let error_msg = format!("Function `{}` is not available.", function_name);
+                return Err(anyhow::anyhow!(error_msg));
             }
 
             if packages_functions.len() == 1 {
                 let (_, package) = &packages_functions[0];
                 return Ok(FunctionId {
                     package_name: package.name.to_string(),
-                    function_name: function,
+                    function_name: function_name,
                 });
             }
 
-            Err(anyhow::anyhow!(
-                "Function `{}` exists in multiple packages. Please specify the package using the format 'package::function'. Available: {:?}",
-                function,
-                packages_functions
-                    .iter()
-                    .map(|(_, pkg)| format!("{}::{}", pkg.name, function))
-                    .collect::<Vec<_>>()
-            ))
+            let error_msg = format!(
+                "Function `{}` exists in multiple packages. Please specify the package using --package.",
+                function_name,
+            );
+            Err(anyhow::anyhow!(error_msg))
         }
-        None => {
+        (Some(package_name), None) => {
+            let package_functions = discovery.get_package_functions_by_name(&package_name);
+
+            if let Some(functions) = package_functions {
+                if functions.is_empty() {
+                    let error_msg =
+                        format!("Package `{}` has no registered functions", package_name);
+                    return Err(anyhow::anyhow!(error_msg));
+                }
+
+                let function_ids: Vec<FunctionId> = functions
+                    .iter()
+                    .map(|f| FunctionId {
+                        package_name: package_name.clone(),
+                        function_name: f.routine_name.clone(),
+                    })
+                    .collect();
+
+                let selected = prompt_function(function_ids)?;
+
+                return Ok(selected);
+            }
+
+            let error_msg = format!("Package `{}` not found.", package_name);
+            Err(anyhow::anyhow!(error_msg))
+        }
+        (None, None) => {
             if discovery.is_empty() {
                 return Err(anyhow::anyhow!(
                     "No training functions found in the project"
                 ));
             }
-            prompt_function(discovery)
+            let function_ids = discovery.get_function_ids();
+            prompt_function(function_ids)
         }
     }
 }

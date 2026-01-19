@@ -2,6 +2,8 @@ use crate::execution::BackendType;
 
 #[derive(serde::Deserialize, serde::Serialize)]
 pub struct TrainingJobArgs {
+    /// The package name
+    pub package: String,
     /// The function to run
     pub function: String,
     /// Backend to use
