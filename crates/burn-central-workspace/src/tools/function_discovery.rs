@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Arc;
 
 const MAGIC: &str = "BCFN1|";
@@ -155,7 +155,7 @@ impl FunctionDiscovery {
         cancellation_token: &CancellationToken,
         event_reporter: Option<Arc<CheckEventReporter>>,
     ) -> Result<String, DiscoveryError> {
-        let mut cmd = Command::new("cargo");
+        let mut cmd = super::cargo::command();
         cmd.current_dir(&self.project_root)
             .arg("rustc")
             .arg("--lib")
@@ -230,7 +230,7 @@ impl FunctionDiscovery {
             let reader = BufReader::new(stderr);
             let errors_tx = errors_tx.clone();
             std::thread::spawn(move || {
-                for line in reader.lines().flatten() {
+                for line in reader.lines().map_while(Result::ok) {
                     let _ = errors_tx.send(line);
                 }
             });

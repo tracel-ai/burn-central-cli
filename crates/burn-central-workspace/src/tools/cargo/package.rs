@@ -266,9 +266,10 @@ fn build_crate_metadata(
     for pkg in &metadata.packages {
         for dep in &pkg.dependencies {
             let dep_key = format!("{}:{}", dep.name, dep.kind);
-            if !all_deps.contains_key(&dep_key) {
+            all_deps.entry(dep_key).or_insert_with(|| {
                 let is_local = dep.path.is_some();
-                let crate_dep = Dep::new(
+                
+                Dep::new(
                     dep.name.clone(),
                     dep.req.to_string(),
                     dep.features.clone(),
@@ -292,9 +293,8 @@ fn build_crate_metadata(
                         }
                     },
                     None,
-                );
-                all_deps.insert(dep_key, crate_dep);
-            }
+                )
+            });
         }
     }
 
