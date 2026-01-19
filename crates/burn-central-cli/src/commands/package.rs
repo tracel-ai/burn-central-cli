@@ -1,15 +1,19 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::commands::init::ensure_git_repo_clean;
 use crate::context::CliContext;
-use crate::helpers::{require_linked_project, validate_project_exists_on_server};
+use crate::helpers::{
+    preload_functions, require_linked_project, validate_project_exists_on_server,
+};
 use anyhow::Context;
 use burn_central_client::Client;
 use burn_central_client::request::{
     BurnCentralCodeMetadataRequest, CrateVersionMetadataRequest, RegisteredFunctionRequest,
 };
 use burn_central_workspace::ProjectContext;
-use burn_central_workspace::tools::cargo::package::{PackagedCrateData, package};
+use burn_central_workspace::tools::cargo::package::{PackageEvent, PackagedCrateData, package};
+use burn_central_workspace::tools::functions_registry::FunctionRegistry;
 use burn_central_workspace::tools::git::is_repo_dirty;
 use clap::Args;
 
@@ -21,10 +25,15 @@ pub struct PackageArgs {
 
 pub(crate) fn handle_command(args: PackageArgs, context: CliContext) -> anyhow::Result<()> {
     let project = require_linked_project(&context)?;
-    let version = package_sequence(&context, &project, args.allow_dirty)?;
+
+    let version = package_sequence(&context, &project, None, args.allow_dirty)?;
     context
         .terminal()
         .print_success(&format!("New project version uploaded: {version}"));
+
+    context
+        .terminal()
+        .finalize("Project packaged successfully.");
 
     Ok(())
 }
@@ -32,6 +41,7 @@ pub(crate) fn handle_command(args: PackageArgs, context: CliContext) -> anyhow::
 pub fn package_sequence(
     context: &CliContext,
     project: &ProjectContext,
+    discovery: Option<&FunctionRegistry>,
     allow_dirty: bool,
 ) -> anyhow::Result<String> {
     if is_repo_dirty()? && !allow_dirty {
@@ -41,21 +51,35 @@ pub fn package_sequence(
     let client = context.create_client()?;
 
     validate_project_exists_on_server(context, project, &client)?;
+
+    let spinner = context.terminal().spinner();
+    spinner.start("Packaging local files...");
+    let spinner_clone = spinner.clone();
     let package = package(
         &project.burn_dir().artifacts_dir(),
         project.get_crate_name(),
+        Arc::new(move |msg: PackageEvent| {
+            spinner_clone.set_message(msg.message);
+        }),
     )
     .map_err(|e| {
+        spinner.stop("Packaging failed.");
         context
             .terminal()
             .print_err(&format!("Error during packaging: {}", e));
         anyhow::anyhow!("Failed to package project")
     })?;
 
-    let registry = project.load_functions()?;
+    spinner.stop("Packaging completed.");
+
+    let discovery = if let Some(discovery) = discovery {
+        discovery
+    } else {
+        &preload_functions(context, project)?
+    };
 
     let code_metadata = BurnCentralCodeMetadataRequest {
-        functions: registry
+        functions: discovery
             .get_function_references()
             .iter()
             .map(|f| RegisteredFunctionRequest {

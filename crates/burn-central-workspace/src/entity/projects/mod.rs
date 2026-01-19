@@ -1,9 +1,12 @@
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::entity::projects::burn_dir::{BurnDir, project::BurnCentralProject};
+use crate::event::Reporter;
 use crate::execution::cancellable::CancellationToken;
-use crate::tools::function_discovery::{FunctionDiscovery, FunctionMetadata};
+use crate::tools::function_discovery::{
+    DiscoveryConfig, DiscoveryError, DiscoveryEvent, FunctionDiscovery, PkgId,
+};
 use crate::tools::functions_registry::FunctionRegistry;
 
 pub mod burn_dir;
@@ -55,7 +58,7 @@ pub struct ProjectContext {
     pub build_profile: String,
     pub burn_dir: BurnDir,
     pub project: BurnCentralProject,
-    function_registry: Mutex<Vec<FunctionMetadata>>,
+    function_registry: Mutex<FunctionRegistry>,
 }
 
 pub struct CrateInfo {
@@ -279,12 +282,8 @@ impl ProjectContext {
         &self.crate_info.user_crate_dir
     }
 
-    pub fn get_workspace_root(&self) -> PathBuf {
-        self.crate_info
-            .metadata
-            .workspace_root
-            .clone()
-            .into_std_path_buf()
+    pub fn get_workspace_root(&self) -> &Path {
+        self.crate_info.metadata.workspace_root.as_std_path()
     }
 
     pub fn get_manifest_path(&self) -> PathBuf {
@@ -299,36 +298,65 @@ impl ProjectContext {
         &self.crate_info.user_crate_dir
     }
 
-    pub fn load_functions(&self) -> anyhow::Result<FunctionRegistry> {
+    pub fn load_functions(
+        &self,
+        reporter: Option<Arc<dyn Reporter<DiscoveryEvent>>>,
+    ) -> Result<FunctionRegistry, DiscoveryError> {
         let token = CancellationToken::new();
-        self.load_functions_cancellable(&token)
+        self.load_functions_cancellable(&token, reporter)
     }
 
     pub fn load_functions_cancellable(
         &self,
         cancel_token: &CancellationToken,
-    ) -> anyhow::Result<FunctionRegistry> {
+        reporter: Option<Arc<dyn Reporter<DiscoveryEvent>>>,
+    ) -> Result<FunctionRegistry, DiscoveryError> {
         let mut functions = self.function_registry.lock().unwrap();
         if functions.is_empty() {
-            if cancel_token.is_cancelled() {
-                return Err(anyhow::anyhow!("Function discovery was cancelled"));
+            // TODO: later we will want to discover all workspace packages
+            // let workspace_pkgids = self.crate_info.metadata.workspace_members.clone();
+            let workspace_pkgids = [self.get_current_package().id.clone()];
+            let workspace_packages: Vec<_> = self
+                .crate_info
+                .metadata
+                .packages
+                .iter()
+                .filter(|pkg| workspace_pkgids.contains(&pkg.id))
+                .collect();
+
+            let pkgids = workspace_packages
+                .iter()
+                .map(|pkg| PkgId {
+                    name: pkg.name.to_string(),
+                    version: Some(pkg.version.to_string()),
+                })
+                .collect::<Vec<_>>();
+
+            let config = DiscoveryConfig {
+                packages: pkgids,
+                target_dir: Some(self.burn_dir.target_dir()),
+            };
+
+            let result = FunctionDiscovery::new(self.get_workspace_root()).discover_functions(
+                &config,
+                cancel_token,
+                reporter,
+            )?;
+
+            let mut registry = FunctionRegistry::new();
+            for (pkgid, funcs) in result.functions.into_iter() {
+                let package = workspace_packages
+                    .iter()
+                    .find(|pkg| pkg.name.as_str() == pkgid.name)
+                    .expect("Discovered package should be in workspace");
+                registry
+                    .get_or_create_package_entry((*package).clone())
+                    .extend(funcs);
             }
 
-            let current_pkg = self.get_current_package();
-            let discovered_functions = FunctionDiscovery::new(&self.crate_info.user_crate_dir)
-                .with_manifest_path(current_pkg.manifest_path.clone())
-                .with_target_dir(self.burn_dir.target_dir())
-                .discover_functions(cancel_token)
-                .map_err(|e| {
-                    anyhow::anyhow!(
-                        "Failed to discover functions in crate '{}': {}",
-                        self.crate_info.user_crate_name,
-                        e
-                    )
-                })?;
-            *functions = discovered_functions;
+            *functions = registry;
         }
-        Ok(FunctionRegistry::new(functions.clone()))
+        Ok(functions.clone())
     }
 
     pub fn get_current_package(&self) -> &cargo_metadata::Package {

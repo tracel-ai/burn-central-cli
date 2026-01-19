@@ -8,6 +8,7 @@ use burn_central_workspace::execution::local::ExecutionEvent;
 use burn_central_workspace::execution::local::ExecutionEventReporter;
 use burn_central_workspace::execution::local::LocalExecutionConfig;
 use burn_central_workspace::execution::local::LocalExecutor;
+use burn_central_workspace::tools::functions_registry::FunctionRegistry;
 use clap::Parser;
 use clap::ValueHint;
 use cliclack::{MultiProgress, ProgressBar};
@@ -20,6 +21,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::commands::package::package_sequence;
+use crate::helpers::preload_functions;
 use crate::helpers::{require_linked_project, validate_project_exists_on_server};
 
 use crate::tools::terminal::Terminal;
@@ -114,13 +116,13 @@ fn execute_remotely(
 
     validate_project_exists_on_server(context, project_ctx, &client)?;
 
-    preload_functions(context, project_ctx)?;
+    let discovery = preload_functions(context, project_ctx)?;
 
     let bc_project = project_ctx.get_project();
     let compute_provider = args
         .compute_provider
         .context("Compute provider should be provided")?;
-    let function = get_function_to_run(args.function, project_ctx)?;
+    let function = get_function_to_run(args.function, &discovery)?;
 
     let code_version = match args.code_version {
         Some(version) => {
@@ -133,7 +135,7 @@ fn execute_remotely(
             context
                 .terminal()
                 .print("Packaging project to create a new code version...");
-            package_sequence(context, project_ctx, false)?
+            package_sequence(context, project_ctx, Some(&discovery), false)?
         }
     };
 
@@ -161,20 +163,6 @@ fn execute_remotely(
             )
         })?;
 
-    Ok(())
-}
-
-fn preload_functions(context: &CliContext, project: &ProjectContext) -> anyhow::Result<()> {
-    let spinner = context.terminal().spinner();
-    spinner.start("Discovering project functions...");
-    let functions = project
-        .load_functions()
-        .context("Function discovery failed")?;
-
-    spinner.stop(format!(
-        "Discovered {} functions.",
-        functions.get_function_references().len()
-    ));
     Ok(())
 }
 
@@ -310,11 +298,11 @@ fn execute_locally(
 
     let args_json = ExperimentConfig::load_config(args.args, args.overrides)?;
 
-    preload_functions(context, project)?;
+    let discovery = preload_functions(context, project)?;
 
-    let function = get_function_to_run(args.function, project)?;
+    let function = get_function_to_run(args.function, &discovery)?;
 
-    let code_version = package_sequence(context, project, false)?;
+    let code_version = package_sequence(context, project, Some(&discovery), false)?;
 
     let executor = LocalExecutor::new(project);
     let backend = args.backend.unwrap_or_default();
@@ -416,10 +404,13 @@ fn execute_locally(
 
 fn get_function_to_run(
     function: Option<String>,
-    project: &ProjectContext,
+    discovery: &FunctionRegistry,
 ) -> anyhow::Result<String> {
-    let executor = LocalExecutor::new(project);
-    let available_functions = executor.list_training_functions()?;
+    let available_functions = discovery
+        .get_function_references()
+        .iter()
+        .map(|f| f.routine_name.to_lowercase())
+        .collect::<Vec<_>>();
 
     match function {
         Some(function) => {

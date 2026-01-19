@@ -4,6 +4,8 @@ pub mod local;
 use serde::{Deserialize, Serialize};
 use strum::EnumString;
 
+use crate::tools::function_discovery::DiscoveryError;
+
 /// Types of procedures that can be executed
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -70,7 +72,10 @@ pub enum ExecutionError {
     RuntimeFailed(String),
 
     #[error("Function discovery failed: {0}")]
-    FunctionDiscovery(String),
+    FunctionDiscovery(DiscoveryError),
+
+    #[error("Function '{0}' not found.")]
+    FunctionNotFound(String),
 
     #[error("Execution cancelled")]
     Cancelled,
