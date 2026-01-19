@@ -12,7 +12,7 @@ use burn_central_client::request::{
     BurnCentralCodeMetadataRequest, CrateVersionMetadataRequest, RegisteredFunctionRequest,
 };
 use burn_central_workspace::ProjectContext;
-use burn_central_workspace::tools::cargo::workspace_package::{
+use burn_central_workspace::tools::cargo::package::{
     PackageEvent, PackagedCrateData, package_workspace,
 };
 use burn_central_workspace::tools::functions_registry::FunctionRegistry;

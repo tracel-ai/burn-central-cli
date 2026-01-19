@@ -6,17 +6,8 @@
 //!
 //! Definitions and functions that are not copied from Cargo do not have a link to the original source code.
 
-mod dependency;
-mod features;
-mod interning;
 pub mod package;
-mod paths;
-mod restricted_names;
 pub mod schemas;
-mod toml;
-mod version;
-mod workspace;
-pub mod workspace_package;
 
 use std::ffi::OsString;
 
