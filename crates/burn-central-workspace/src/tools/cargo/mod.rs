@@ -16,6 +16,7 @@ pub mod schemas;
 mod toml;
 mod version;
 mod workspace;
+pub mod workspace_package;
 
 use std::ffi::OsString;
 

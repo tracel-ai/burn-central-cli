@@ -12,7 +12,9 @@ use burn_central_client::request::{
     BurnCentralCodeMetadataRequest, CrateVersionMetadataRequest, RegisteredFunctionRequest,
 };
 use burn_central_workspace::ProjectContext;
-use burn_central_workspace::tools::cargo::package::{PackageEvent, PackagedCrateData, package};
+use burn_central_workspace::tools::cargo::workspace_package::{
+    PackageEvent, PackagedCrateData, package_workspace,
+};
 use burn_central_workspace::tools::functions_registry::FunctionRegistry;
 use burn_central_workspace::tools::git::is_repo_dirty;
 use clap::Args;
@@ -53,9 +55,9 @@ pub fn package_sequence(
     validate_project_exists_on_server(context, project, &client)?;
 
     let spinner = context.terminal().spinner();
-    spinner.start("Packaging local files...");
+    spinner.start("Packaging workspace...");
     let spinner_clone = spinner.clone();
-    let package = package(
+    let package = package_workspace(
         &project.burn_dir().artifacts_dir(),
         project.get_workspace_name(),
         Arc::new(move |msg: PackageEvent| {
@@ -63,14 +65,14 @@ pub fn package_sequence(
         }),
     )
     .map_err(|e| {
-        spinner.stop("Packaging failed.");
+        spinner.error("Packaging failed.");
         context
             .terminal()
             .print_err(&format!("Error during packaging: {}", e));
-        anyhow::anyhow!("Failed to package project")
+        anyhow::anyhow!("Failed to package workspace")
     })?;
 
-    spinner.stop("Packaging completed.");
+    spinner.stop("Workspace packaging completed.");
 
     let discovery = if let Some(discovery) = discovery {
         discovery
