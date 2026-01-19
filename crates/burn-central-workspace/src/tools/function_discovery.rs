@@ -100,7 +100,7 @@ pub struct DiscoveryEvent {
     pub message: Option<String>,
 }
 
-type CheckEventReporter = dyn crate::event::Reporter<DiscoveryEvent>;
+type DiscoveryEventReporter = dyn crate::event::Reporter<DiscoveryEvent>;
 
 impl FunctionDiscovery {
     pub fn new(project_root: impl Into<PathBuf>) -> Self {
@@ -114,7 +114,7 @@ impl FunctionDiscovery {
         &self,
         discovery_config: &DiscoveryConfig,
         cancellation_token: &CancellationToken,
-        event_reporter: Option<Arc<CheckEventReporter>>,
+        event_reporter: Option<Arc<DiscoveryEventReporter>>,
     ) -> Result<DiscoveryResult, DiscoveryError> {
         let mut package_functions = HashMap::new();
         for package in &discovery_config.packages {
@@ -153,7 +153,7 @@ impl FunctionDiscovery {
         package: &PkgId,
         target_dir: Option<&Path>,
         cancellation_token: &CancellationToken,
-        event_reporter: Option<Arc<CheckEventReporter>>,
+        event_reporter: Option<Arc<DiscoveryEventReporter>>,
     ) -> Result<String, DiscoveryError> {
         let mut cmd = super::cargo::command();
         cmd.current_dir(&self.project_root)
