@@ -96,7 +96,13 @@ fn prompt_function(function_ids: Vec<FunctionId>) -> anyhow::Result<FunctionId> 
         .items(
             function_ids
                 .into_iter()
-                .map(|id| (id.clone(), id.function_name, id.package_name))
+                .map(|id| {
+                    (
+                        id.clone(),
+                        format!("[{}] {}", id.package_name, id.function_name),
+                        "",
+                    )
+                })
                 .collect::<Vec<_>>()
                 .as_slice(),
         )
