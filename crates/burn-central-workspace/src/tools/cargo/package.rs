@@ -268,7 +268,7 @@ fn build_crate_metadata(
             let dep_key = format!("{}:{}", dep.name, dep.kind);
             all_deps.entry(dep_key).or_insert_with(|| {
                 let is_local = dep.path.is_some();
-                
+
                 Dep::new(
                     dep.name.clone(),
                     dep.req.to_string(),
