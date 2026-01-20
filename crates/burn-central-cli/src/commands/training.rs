@@ -338,7 +338,8 @@ fn execute_locally(
             .context("No API key available")?
             .to_string(),
         context.get_api_endpoint().to_string(),
-        function.clone(),
+        Some(function.package_name.clone()),
+        function.function_name.clone(),
         backend,
         ProcedureType::Training,
         code_version,

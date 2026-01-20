@@ -32,8 +32,12 @@ pub struct LocalExecutionConfig {
     pub api_key: String,
     /// The API endpoint to use
     pub api_endpoint: String,
+    // TODO: in the future this should be not optional, but it is now
+    // for backward compatibility with the frontend which does not provide it yet
+    /// Optional package name (if not provided, will be resolved)
+    pub package: Option<String>,
     /// The function to execute
-    pub function: FunctionId,
+    pub function: String,
     /// Backend to use for execution
     pub backend: BackendType,
     /// Launch arguments
@@ -65,7 +69,8 @@ impl LocalExecutionConfig {
     pub fn new(
         api_key: String,
         api_endpoint: String,
-        function: FunctionId,
+        package: Option<String>,
+        function: String,
         backend: BackendType,
         procedure_type: ProcedureType,
         code_version: String,
@@ -73,6 +78,7 @@ impl LocalExecutionConfig {
         Self {
             api_key,
             api_endpoint,
+            package,
             function,
             backend,
             procedure_type,
@@ -202,7 +208,7 @@ impl<'a> LocalExecutor<'a> {
 
         // Resolve which package contains the target function
         let (target_package, target_package_functions) =
-            self.resolve_target_package(&discovery, &config.function)?;
+            self.resolve_target_package(&discovery, config.package.as_deref(), &config.function)?;
 
         // Build configuration for compilation
         let build_config = BuildConfig {
@@ -241,7 +247,7 @@ impl<'a> LocalExecutor<'a> {
 
         // Run the executable
         let run_config = RunConfig {
-            function: config.function.function_name,
+            function: config.function,
             procedure_type: config.procedure_type,
             args: config.args,
             api_key: config.api_key,
@@ -297,9 +303,18 @@ impl<'a> LocalExecutor<'a> {
     fn resolve_target_package(
         &self,
         discovery: &crate::tools::functions_registry::FunctionRegistry,
-        function: &FunctionId,
+        package: Option<&str>,
+        function: &str,
     ) -> Result<(Package, Vec<FunctionMetadata>), ExecutionError> {
-        let packages_with_function = discovery.get_package_function_pair_by_id(function);
+        let packages_with_function = if let Some(package_name) = package {
+            discovery.get_package_function_pair_by_id(&FunctionId::new(package_name, function))
+        } else {
+            discovery
+                .find_packages_for_function_name(function)
+                .iter()
+                .next()
+                .cloned()
+        };
 
         if packages_with_function.is_none() {
             return Err(ExecutionError::FunctionNotFound(function.to_string()));
