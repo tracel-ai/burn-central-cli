@@ -462,7 +462,7 @@ fn get_function_to_run(
                 let (_, package) = &packages_functions[0];
                 return Ok(FunctionId {
                     package_name: package.name.to_string(),
-                    function_name: function_name,
+                    function_name,
                 });
             }
 

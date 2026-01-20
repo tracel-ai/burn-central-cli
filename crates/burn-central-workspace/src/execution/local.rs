@@ -311,8 +311,7 @@ impl<'a> LocalExecutor<'a> {
         } else {
             discovery
                 .find_packages_for_function_name(function)
-                .iter()
-                .next()
+                .first()
                 .cloned()
         };
 
