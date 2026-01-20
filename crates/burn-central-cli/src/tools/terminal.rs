@@ -2,6 +2,7 @@ use cliclack::{ProgressBar, clear_screen, confirm};
 
 use colored::CustomColor;
 
+#[allow(dead_code)]
 pub const BURN_ORANGE: CustomColor = CustomColor {
     r: 254,
     g: 75,

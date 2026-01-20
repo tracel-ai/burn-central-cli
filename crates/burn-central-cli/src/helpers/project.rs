@@ -1,17 +1,11 @@
 //! Project helpers for CLI operations
 
 use crate::context::CliContext;
-use anyhow::Context;
 use burn_central_client::Client;
-use burn_central_workspace::{
-    CrateInfo, ProjectContext,
-    tools::{cargo, function_discovery::DiscoveryEvent, functions_registry::FunctionRegistry},
-};
-use colored::Colorize;
-use std::sync::Arc;
+use burn_central_workspace::{ProjectContext, WorkspaceInfo, tools::cargo};
 
 /// Check if current directory contains a Rust project (has Cargo.toml)
-pub fn is_rust_project() -> bool {
+pub fn is_cargo_workspace() -> bool {
     find_manifest().is_ok()
 }
 
@@ -57,12 +51,6 @@ pub fn handle_project_context_error(
             context.terminal().print_err(&e.to_string());
             context.terminal().print("Ensure your Cargo.toml is valid.");
         }
-        burn_central_workspace::ErrorKind::InvalidPackage => {
-            context.terminal().print_err(&e.to_string());
-            context
-                .terminal()
-                .print("Ensure your Cargo.toml defines a valid Rust package.");
-        }
         burn_central_workspace::ErrorKind::BurnDirInitialization => {
             context.terminal().print_err(&e.to_string());
             context
@@ -90,21 +78,21 @@ pub fn require_linked_project(context: &CliContext) -> anyhow::Result<ProjectCon
     }
 }
 
-/// Require a Rust project (with or without Burn Central linkage)
-pub fn require_rust_project(context: &CliContext) -> anyhow::Result<CrateInfo> {
+/// Require a Cargo workspace (with or without Burn Central linkage)
+pub fn require_cargo_workspace(context: &CliContext) -> anyhow::Result<WorkspaceInfo> {
     let manifest_path = find_manifest()?;
-    match ProjectContext::load_crate_info(&manifest_path) {
-        Ok(crate_info) => Ok(crate_info),
+    match ProjectContext::load_workspace_info(&manifest_path) {
+        Ok(workspace_info) => Ok(workspace_info),
         Err(e) => {
             handle_project_context_error(context, &e);
-            anyhow::bail!("Failed to load Rust project crate info")
+            anyhow::bail!("Failed to load Cargo workspace info")
         }
     }
 }
 
 /// Check if we're in a valid state for initialization
 pub fn can_initialize_project(context: &CliContext, force: bool) -> anyhow::Result<bool> {
-    if !is_rust_project() {
+    if !is_cargo_workspace() {
         context
             .terminal()
             .print_err("No Rust project found in current directory.");
@@ -165,54 +153,4 @@ pub fn validate_project_exists_on_server(
             anyhow::bail!("Failed to verify project exists on server: {}", e)
         }
     }
-}
-
-pub fn preload_functions(
-    context: &CliContext,
-    project: &ProjectContext,
-) -> anyhow::Result<FunctionRegistry> {
-    let spinner = context.terminal().spinner();
-    spinner.start("Discovering project functions...");
-
-    let spinner_clone = spinner.clone();
-    let functions =
-        project
-            .load_functions(Some(Arc::new(move |event: DiscoveryEvent| {
-                let mut message = format!(
-                    "Discovering project functions: Checking {}",
-                    event.package.name.bold()
-                );
-                if let Some(msg) = event.message {
-                    message = format!("{} - {}", message, msg);
-                }
-                spinner_clone.set_message(message);
-            })))
-            .inspect_err(|e| {
-                spinner.error("Failed to discover project functions.");
-                match e {
-                burn_central_workspace::tools::function_discovery::DiscoveryError::CargoError {
-                    package: _,
-                    status: _,
-                    diagnostics,
-                } => {
-                    context.terminal().print_err(&format!("Error: {}", e));
-
-                    let header = "=== RUSTC DIAGNOSTICS ===";
-                    let footer = "=".repeat(header.len());
-                    let message =
-                        format!("{}\n\n{}\n{}", header.yellow(), diagnostics, footer.yellow());
-                    context.terminal().print_err(&message);
-                }
-                _ => {
-                    context.terminal().print_err(&format!("Error: {}", e));
-                }
-            }
-            })
-            .context("Function discovery failed")?;
-
-    spinner.stop(format!(
-        "Discovered {} functions.",
-        functions.get_function_references().len()
-    ));
-    Ok(functions)
 }

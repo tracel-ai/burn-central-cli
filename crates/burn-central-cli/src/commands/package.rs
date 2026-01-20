@@ -3,16 +3,17 @@ use std::sync::Arc;
 
 use crate::commands::init::ensure_git_repo_clean;
 use crate::context::CliContext;
-use crate::helpers::{
-    preload_functions, require_linked_project, validate_project_exists_on_server,
-};
+use crate::helpers::{require_linked_project, validate_project_exists_on_server};
+use crate::tools::preload_functions;
 use anyhow::Context;
 use burn_central_client::Client;
 use burn_central_client::request::{
     BurnCentralCodeMetadataRequest, CrateVersionMetadataRequest, RegisteredFunctionRequest,
 };
 use burn_central_workspace::ProjectContext;
-use burn_central_workspace::tools::cargo::package::{PackageEvent, PackagedCrateData, package};
+use burn_central_workspace::tools::cargo::package::{
+    PackageEvent, PackagedCrateData, package_workspace,
+};
 use burn_central_workspace::tools::functions_registry::FunctionRegistry;
 use burn_central_workspace::tools::git::is_repo_dirty;
 use clap::Args;
@@ -27,9 +28,16 @@ pub(crate) fn handle_command(args: PackageArgs, context: CliContext) -> anyhow::
     let project = require_linked_project(&context)?;
 
     let version = package_sequence(&context, &project, None, args.allow_dirty)?;
-    context
-        .terminal()
-        .print_success(&format!("New project version uploaded: {version}"));
+
+    if version.has_uploaded {
+        context
+            .terminal()
+            .print_success(&format!("New project version uploaded: {}", version.digest));
+    } else {
+        context
+            .terminal()
+            .print_success("No changes detected; project is up to date.");
+    };
 
     context
         .terminal()
@@ -38,12 +46,17 @@ pub(crate) fn handle_command(args: PackageArgs, context: CliContext) -> anyhow::
     Ok(())
 }
 
+pub struct PackageResult {
+    pub digest: String,
+    pub has_uploaded: bool,
+}
+
 pub fn package_sequence(
     context: &CliContext,
     project: &ProjectContext,
     discovery: Option<&FunctionRegistry>,
     allow_dirty: bool,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<PackageResult> {
     if is_repo_dirty()? && !allow_dirty {
         ensure_git_repo_clean(context.terminal())?;
     }
@@ -53,24 +66,24 @@ pub fn package_sequence(
     validate_project_exists_on_server(context, project, &client)?;
 
     let spinner = context.terminal().spinner();
-    spinner.start("Packaging local files...");
+    spinner.start("Packaging workspace...");
     let spinner_clone = spinner.clone();
-    let package = package(
+    let package = package_workspace(
         &project.burn_dir().artifacts_dir(),
-        project.get_crate_name(),
+        project.get_workspace_name(),
         Arc::new(move |msg: PackageEvent| {
             spinner_clone.set_message(msg.message);
         }),
     )
     .map_err(|e| {
-        spinner.stop("Packaging failed.");
+        spinner.error("Packaging failed.");
         context
             .terminal()
             .print_err(&format!("Error during packaging: {}", e));
-        anyhow::anyhow!("Failed to package project")
+        anyhow::anyhow!("Failed to package workspace")
     })?;
 
-    spinner.stop("Packaging completed.");
+    spinner.stop("Workspace packaging completed.");
 
     let discovery = if let Some(discovery) = discovery {
         discovery
@@ -80,14 +93,17 @@ pub fn package_sequence(
 
     let code_metadata = BurnCentralCodeMetadataRequest {
         functions: discovery
-            .get_function_references()
-            .iter()
-            .map(|f| RegisteredFunctionRequest {
-                mod_path: f.mod_path.clone(),
-                fn_name: f.fn_name.clone(),
-                proc_type: f.proc_type.clone(),
-                code: f.get_function_code(),
-                routine: f.routine_name.clone(),
+            .get_functions()
+            .into_iter()
+            .map(|f| {
+                let code = f.get_function_code();
+                RegisteredFunctionRequest {
+                    mod_path: f.mod_path,
+                    fn_name: f.fn_name,
+                    proc_type: f.proc_type,
+                    code,
+                    routine: f.routine_name,
+                }
             })
             .collect(),
     };
@@ -97,7 +113,7 @@ pub fn package_sequence(
         &client,
         &bc_project.owner,
         &bc_project.name,
-        project.get_crate_name(),
+        project.get_workspace_name(),
         code_metadata,
         package.crate_metadata,
         &package.digest,
@@ -115,7 +131,7 @@ pub fn upload_new_project_version(
     code_metadata: BurnCentralCodeMetadataRequest,
     crates_data: Vec<PackagedCrateData>,
     last_commit: &str,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<PackageResult> {
     let (data, metadata): (Vec<(String, PathBuf)>, Vec<CrateVersionMetadataRequest>) = crates_data
         .into_iter()
         .map(|krate| {
@@ -143,7 +159,7 @@ pub fn upload_new_project_version(
             format!("Failed to get upload URLs for project {namespace}/{project_name}")
         })?;
 
-    if let Some(urls) = response.urls {
+    if let Some(ref urls) = response.urls {
         for (crate_name, file_path) in data.into_iter() {
             let url = urls
                 .get(&crate_name)
@@ -168,5 +184,8 @@ pub fn upload_new_project_version(
             })?;
     }
 
-    Ok(response.digest)
+    Ok(PackageResult {
+        digest: response.digest,
+        has_uploaded: response.urls.is_some(),
+    })
 }

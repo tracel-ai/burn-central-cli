@@ -6,16 +6,8 @@
 //!
 //! Definitions and functions that are not copied from Cargo do not have a link to the original source code.
 
-mod dependency;
-mod features;
-mod interning;
 pub mod package;
-mod paths;
-mod restricted_names;
 pub mod schemas;
-mod toml;
-mod version;
-mod workspace;
 
 use std::ffi::OsString;
 
@@ -26,6 +18,7 @@ pub fn cargo_binary() -> OsString {
 pub fn try_locate_manifest() -> Option<std::path::PathBuf> {
     let output = command()
         .arg("locate-project")
+        .arg("--workspace")
         .output()
         .expect("Failed to run cargo locate-project");
     if !output.status.success() {

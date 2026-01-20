@@ -1,5 +1,5 @@
 use crate::context::CliContext;
-use crate::helpers::{can_initialize_project, require_rust_project};
+use crate::helpers::{can_initialize_project, require_cargo_workspace};
 use crate::tools::terminal::Terminal;
 use anyhow::Context;
 use burn_central_client::Client;
@@ -26,13 +26,13 @@ pub fn handle_command(args: InitArgs, mut context: CliContext) -> anyhow::Result
 
 pub fn prompt_init(context: &CliContext, client: &Client) -> anyhow::Result<()> {
     let user = client.get_current_user()?;
-    let crate_info = require_rust_project(context)?;
+    let workspace_info = require_cargo_workspace(context)?;
 
     context.terminal().command_title("Project Initialization");
 
     let terminal = context.terminal();
 
-    ensure_git_repo_initialized(&crate_info.get_ws_root())?;
+    ensure_git_repo_initialized(&workspace_info.get_ws_root())?;
     ensure_git_repo_clean(terminal)?;
 
     let first_commit_hash = git::get_first_commit_hash();
@@ -45,7 +45,7 @@ pub fn prompt_init(context: &CliContext, client: &Client) -> anyhow::Result<()> 
     let _first_commit_hash = first_commit_hash?;
 
     let project_owner = prompt_owner_name(&user.username, client)?;
-    let project_name = prompt_project_name(&crate_info.user_crate_name)?;
+    let project_name = prompt_project_name(&workspace_info.workspace_name)?;
 
     let owner_name = match &project_owner {
         ProjectKind::User => user.namespace.as_str(),
@@ -64,7 +64,7 @@ pub fn prompt_init(context: &CliContext, client: &Client) -> anyhow::Result<()> 
 
     ProjectContext::init(
         project_info,
-        &crate_info.get_manifest_path(),
+        &workspace_info.get_manifest_path(),
         &context.get_burn_dir_name(),
     )
     .map_err(|e| {
@@ -109,12 +109,12 @@ fn prompt_owner_name(user_name: &str, client: &Client) -> anyhow::Result<Project
         .map_err(anyhow::Error::from)
 }
 
-pub fn prompt_project_name(crate_name: &str) -> anyhow::Result<String> {
+pub fn prompt_project_name(workspace_name: &str) -> anyhow::Result<String> {
     let input = cliclack::input(format!(
         "Enter the project name (default: {}) ",
-        console::style(crate_name).bold()
+        console::style(workspace_name).bold()
     ))
-    .placeholder(crate_name)
+    .placeholder(workspace_name)
     .required(false)
     .validate(|input: &String| {
         if input.is_empty()
@@ -130,7 +130,7 @@ pub fn prompt_project_name(crate_name: &str) -> anyhow::Result<String> {
     .interact::<String>()?;
 
     let input = if input.is_empty() {
-        crate_name.to_string()
+        workspace_name.to_string()
     } else {
         input
     };
@@ -233,7 +233,7 @@ pub fn commit_sequence() -> anyhow::Result<()> {
     if do_commit {
         let commit_message = "Automatic commit by Burn Central CLI";
         let status = std::process::Command::new("git")
-            .args(["add", "."])
+            .args(["add", "--all"])
             .stderr(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .status()

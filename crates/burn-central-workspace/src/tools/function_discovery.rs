@@ -6,9 +6,9 @@ use crate::execution::cancellable::{CancellableProcess, CancellableResult, Cance
 use quote::ToTokens;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::BufReader;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Arc;
 
 const MAGIC: &str = "BCFN1|";
@@ -100,7 +100,7 @@ pub struct DiscoveryEvent {
     pub message: Option<String>,
 }
 
-type CheckEventReporter = dyn crate::event::Reporter<DiscoveryEvent>;
+type DiscoveryEventReporter = dyn crate::event::Reporter<DiscoveryEvent>;
 
 impl FunctionDiscovery {
     pub fn new(project_root: impl Into<PathBuf>) -> Self {
@@ -114,7 +114,7 @@ impl FunctionDiscovery {
         &self,
         discovery_config: &DiscoveryConfig,
         cancellation_token: &CancellationToken,
-        event_reporter: Option<Arc<CheckEventReporter>>,
+        event_reporter: Option<Arc<DiscoveryEventReporter>>,
     ) -> Result<DiscoveryResult, DiscoveryError> {
         let mut package_functions = HashMap::new();
         for package in &discovery_config.packages {
@@ -130,6 +130,16 @@ impl FunctionDiscovery {
                 .entry(package.clone())
                 .or_insert_with(Vec::new)
                 .extend(functions);
+
+            if let Some(reporter) = event_reporter.as_ref() {
+                reporter.report_event(DiscoveryEvent {
+                    package: package.clone(),
+                    message: Some(format!(
+                        "Discovered {} functions",
+                        package_functions.get(package).map_or(0, |fns| fns.len()),
+                    )),
+                });
+            }
         }
 
         let result = DiscoveryResult {
@@ -143,14 +153,15 @@ impl FunctionDiscovery {
         package: &PkgId,
         target_dir: Option<&Path>,
         cancellation_token: &CancellationToken,
-        event_reporter: Option<Arc<CheckEventReporter>>,
+        event_reporter: Option<Arc<DiscoveryEventReporter>>,
     ) -> Result<String, DiscoveryError> {
-        let mut cmd = Command::new("cargo");
+        let mut cmd = super::cargo::command();
         cmd.current_dir(&self.project_root)
             .arg("rustc")
             .arg("--lib")
             .arg("--profile=check")
-            .arg("--message-format=json");
+            .arg("--message-format=json")
+            .arg("--quiet");
 
         let spec = if let Some(ref version) = package.version {
             format!("{}@{}", package.name, version)
@@ -181,7 +192,7 @@ impl FunctionDiscovery {
             let reader = BufReader::new(stdout);
             let package = package.clone();
             let event_reporter = event_reporter.clone();
-
+            let errors_tx = errors_tx.clone();
             std::thread::spawn(move || {
                 let stream = cargo_metadata::Message::parse_stream(reader);
                 for message in stream.flatten() {
@@ -207,10 +218,20 @@ impl FunctionDiscovery {
                             }
                         }
                         cargo_metadata::Message::TextLine(line) => {
-                            let _ = output_tx.send(line);
+                            let _ = output_tx.send(line.clone());
                         }
                         _ => {}
                     }
+                }
+            });
+        }
+
+        if let Some(stderr) = child.stderr.take() {
+            let reader = BufReader::new(stderr);
+            let errors_tx = errors_tx.clone();
+            std::thread::spawn(move || {
+                for line in reader.lines().map_while(Result::ok) {
+                    let _ = errors_tx.send(line);
                 }
             });
         }

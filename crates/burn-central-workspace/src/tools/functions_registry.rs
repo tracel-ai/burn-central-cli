@@ -1,8 +1,29 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Display};
 
 use cargo_metadata::Package;
 
 use crate::tools::function_discovery::FunctionMetadata;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FunctionId {
+    pub package_name: String,
+    pub function_name: String,
+}
+
+impl FunctionId {
+    pub fn new(package_name: &str, function_name: &str) -> Self {
+        Self {
+            package_name: package_name.to_string(),
+            function_name: function_name.to_string(),
+        }
+    }
+}
+
+impl Display for FunctionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}::{}", self.package_name, self.function_name)
+    }
+}
 
 /// Registry mapping packages to the functions they register. Allows querying which package(s) provide a given function.
 #[derive(Debug, Clone, Default)]
@@ -22,19 +43,50 @@ impl FunctionRegistry {
         self.functions.entry(package).or_default()
     }
 
-    /// Attempt to find the package that contain a function with the given name. If multiple packages contain the function, all are returned.
-    pub fn find_package_from_function(&self, function_name: &str) -> Vec<Package> {
-        self.functions
-            .iter()
-            .filter_map(|(package, functions)| {
-                if functions.iter().any(|f| f.routine_name == function_name) {
-                    Some(package)
-                } else {
-                    None
+    /// Attempt to find the package that contain a function with the given name. If multiple packages contain the function, all are returned with their corresponding metadata.
+    pub fn find_packages_for_function_name(
+        &self,
+        function_name: &str,
+    ) -> Vec<(FunctionMetadata, Package)> {
+        let mut results = Vec::new();
+        for (package, functions) in &self.functions {
+            for function in functions {
+                if function.routine_name == function_name {
+                    results.push((function.clone(), package.clone()));
                 }
-            })
-            .cloned()
-            .collect()
+            }
+        }
+        results.sort_by(|a, b| a.1.name.cmp(&b.1.name));
+        results
+    }
+
+    /// Checks if a function with the given name is registered by any package.
+    pub fn has_function(&self, function_name: &str) -> bool {
+        for functions in self.functions.values() {
+            for function in functions {
+                if function.routine_name == function_name {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Get the list of functions registered by the given package name.
+    pub fn get_package_functions_by_name(
+        &self,
+        package_name: &str,
+    ) -> Option<&Vec<FunctionMetadata>> {
+        for (package, functions) in &self.functions {
+            if package.name.as_str() == package_name {
+                return Some(functions);
+            }
+        }
+        None
+    }
+
+    pub fn get_package_functions(&self, package: &Package) -> Option<&Vec<FunctionMetadata>> {
+        self.functions.get(package)
     }
 
     /// Check if the registry is empty, meaning no functions have been registered by any package.
@@ -47,11 +99,59 @@ impl FunctionRegistry {
         self.functions.values().map(|v| v.len()).sum()
     }
 
-    pub fn get_function_references(&self) -> &[FunctionMetadata] {
-        // backward compatibility: return functions from the first package found
+    /// Get a list of all FunctionIds registered in the registry.
+    pub fn get_function_ids(&self) -> Vec<FunctionId> {
+        let mut functions = self
+            .functions
+            .iter()
+            .flat_map(|(package, funcs)| {
+                funcs.iter().map(move |f| FunctionId {
+                    package_name: package.name.to_string(),
+                    function_name: f.routine_name.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        functions.sort_by(|a, b| a.package_name.cmp(&b.package_name));
+        functions
+    }
+
+    /// Get function metadata by its FunctionId.
+    pub fn get_function_by_id(&self, id: &FunctionId) -> Option<FunctionMetadata> {
+        for (package, functions) in &self.functions {
+            if package.name.as_str() == id.package_name {
+                for function in functions {
+                    if function.routine_name == id.function_name {
+                        return Some(function.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Get function metadata along with its package by FunctionId.
+    pub fn get_package_function_pair_by_id(
+        &self,
+        id: &FunctionId,
+    ) -> Option<(FunctionMetadata, Package)> {
+        for (package, functions) in &self.functions {
+            if package.name.as_str() == id.package_name {
+                for function in functions {
+                    if function.routine_name == id.function_name {
+                        return Some((function.clone(), package.clone()));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Get a list of all registered functions across all packages.
+    pub fn get_functions(&self) -> Vec<FunctionMetadata> {
         self.functions
             .values()
-            .next()
-            .expect("Should have at least one package")
+            .flat_map(|funcs| funcs.iter().cloned())
+            .collect()
     }
 }
