@@ -22,8 +22,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::commands::package::package_sequence;
-use crate::helpers::preload_functions;
 use crate::helpers::{require_linked_project, validate_project_exists_on_server};
+use crate::tools::preload_functions;
 
 use crate::context::CliContext;
 use crate::tools::terminal::Terminal;

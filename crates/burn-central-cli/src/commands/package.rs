@@ -3,9 +3,8 @@ use std::sync::Arc;
 
 use crate::commands::init::ensure_git_repo_clean;
 use crate::context::CliContext;
-use crate::helpers::{
-    preload_functions, require_linked_project, validate_project_exists_on_server,
-};
+use crate::helpers::{require_linked_project, validate_project_exists_on_server};
+use crate::tools::preload_functions;
 use anyhow::Context;
 use burn_central_client::Client;
 use burn_central_client::request::{
