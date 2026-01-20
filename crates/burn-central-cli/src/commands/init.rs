@@ -1,5 +1,5 @@
 use crate::context::CliContext;
-use crate::helpers::{can_initialize_project, require_rust_project};
+use crate::helpers::{can_initialize_project, require_cargo_workspace};
 use crate::tools::terminal::Terminal;
 use anyhow::Context;
 use burn_central_client::Client;
@@ -26,7 +26,7 @@ pub fn handle_command(args: InitArgs, mut context: CliContext) -> anyhow::Result
 
 pub fn prompt_init(context: &CliContext, client: &Client) -> anyhow::Result<()> {
     let user = client.get_current_user()?;
-    let workspace_info = require_rust_project(context)?;
+    let workspace_info = require_cargo_workspace(context)?;
 
     context.terminal().command_title("Project Initialization");
 

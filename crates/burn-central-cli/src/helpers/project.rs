@@ -5,7 +5,7 @@ use burn_central_client::Client;
 use burn_central_workspace::{ProjectContext, WorkspaceInfo, tools::cargo};
 
 /// Check if current directory contains a Rust project (has Cargo.toml)
-pub fn is_rust_project() -> bool {
+pub fn is_cargo_workspace() -> bool {
     find_manifest().is_ok()
 }
 
@@ -51,12 +51,6 @@ pub fn handle_project_context_error(
             context.terminal().print_err(&e.to_string());
             context.terminal().print("Ensure your Cargo.toml is valid.");
         }
-        burn_central_workspace::ErrorKind::InvalidPackage => {
-            context.terminal().print_err(&e.to_string());
-            context
-                .terminal()
-                .print("Ensure your Cargo.toml defines a valid Rust package.");
-        }
         burn_central_workspace::ErrorKind::BurnDirInitialization => {
             context.terminal().print_err(&e.to_string());
             context
@@ -84,21 +78,21 @@ pub fn require_linked_project(context: &CliContext) -> anyhow::Result<ProjectCon
     }
 }
 
-/// Require a Rust project (with or without Burn Central linkage)
-pub fn require_rust_project(context: &CliContext) -> anyhow::Result<WorkspaceInfo> {
+/// Require a Cargo workspace (with or without Burn Central linkage)
+pub fn require_cargo_workspace(context: &CliContext) -> anyhow::Result<WorkspaceInfo> {
     let manifest_path = find_manifest()?;
     match ProjectContext::load_workspace_info(&manifest_path) {
         Ok(workspace_info) => Ok(workspace_info),
         Err(e) => {
             handle_project_context_error(context, &e);
-            anyhow::bail!("Failed to load Rust project workspace info")
+            anyhow::bail!("Failed to load Cargo workspace info")
         }
     }
 }
 
 /// Check if we're in a valid state for initialization
 pub fn can_initialize_project(context: &CliContext, force: bool) -> anyhow::Result<bool> {
-    if !is_rust_project() {
+    if !is_cargo_workspace() {
         context
             .terminal()
             .print_err("No Rust project found in current directory.");

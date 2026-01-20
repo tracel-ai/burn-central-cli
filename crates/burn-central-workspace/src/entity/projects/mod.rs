@@ -15,7 +15,6 @@ pub mod burn_dir;
 pub enum ErrorKind {
     ManifestNotFound,
     Parsing,
-    InvalidPackage,
     BurnDirInitialization,
     BurnDirNotInitialized,
     Unexpected,
