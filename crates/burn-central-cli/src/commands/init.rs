@@ -233,7 +233,7 @@ pub fn commit_sequence() -> anyhow::Result<()> {
     if do_commit {
         let commit_message = "Automatic commit by Burn Central CLI";
         let status = std::process::Command::new("git")
-            .args(["add", "."])
+            .args(["add", "--all"])
             .stderr(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .status()
