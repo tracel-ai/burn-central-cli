@@ -29,9 +29,16 @@ pub(crate) fn handle_command(args: PackageArgs, context: CliContext) -> anyhow::
     let project = require_linked_project(&context)?;
 
     let version = package_sequence(&context, &project, None, args.allow_dirty)?;
-    context
-        .terminal()
-        .print_success(&format!("New project version uploaded: {version}"));
+
+    if version.has_uploaded {
+        context
+            .terminal()
+            .print_success(&format!("New project version uploaded: {}", version.digest));
+    } else {
+        context
+            .terminal()
+            .print_success("No changes detected; project is up to date.");
+    };
 
     context
         .terminal()
@@ -40,12 +47,17 @@ pub(crate) fn handle_command(args: PackageArgs, context: CliContext) -> anyhow::
     Ok(())
 }
 
+pub struct PackageResult {
+    pub digest: String,
+    pub has_uploaded: bool,
+}
+
 pub fn package_sequence(
     context: &CliContext,
     project: &ProjectContext,
     discovery: Option<&FunctionRegistry>,
     allow_dirty: bool,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<PackageResult> {
     if is_repo_dirty()? && !allow_dirty {
         ensure_git_repo_clean(context.terminal())?;
     }
@@ -120,7 +132,7 @@ pub fn upload_new_project_version(
     code_metadata: BurnCentralCodeMetadataRequest,
     crates_data: Vec<PackagedCrateData>,
     last_commit: &str,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<PackageResult> {
     let (data, metadata): (Vec<(String, PathBuf)>, Vec<CrateVersionMetadataRequest>) = crates_data
         .into_iter()
         .map(|krate| {
@@ -148,7 +160,7 @@ pub fn upload_new_project_version(
             format!("Failed to get upload URLs for project {namespace}/{project_name}")
         })?;
 
-    if let Some(urls) = response.urls {
+    if let Some(ref urls) = response.urls {
         for (crate_name, file_path) in data.into_iter() {
             let url = urls
                 .get(&crate_name)
@@ -173,5 +185,8 @@ pub fn upload_new_project_version(
             })?;
     }
 
-    Ok(response.digest)
+    Ok(PackageResult {
+        digest: response.digest,
+        has_uploaded: response.urls.is_some(),
+    })
 }

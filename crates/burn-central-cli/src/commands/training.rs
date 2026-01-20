@@ -143,7 +143,7 @@ fn execute_remotely(
             context
                 .terminal()
                 .print("Packaging project to create a new code version...");
-            package_sequence(context, project_ctx, Some(&discovery), false)?
+            package_sequence(context, project_ctx, Some(&discovery), false)?.digest
         }
     };
 
@@ -342,7 +342,7 @@ fn execute_locally(
         function.function_name.clone(),
         backend,
         ProcedureType::Training,
-        code_version,
+        code_version.digest,
     )
     .with_args(args_json.data);
 
