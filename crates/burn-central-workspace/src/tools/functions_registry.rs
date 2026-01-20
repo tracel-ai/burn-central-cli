@@ -56,6 +56,7 @@ impl FunctionRegistry {
                 }
             }
         }
+        results.sort_by(|a, b| a.1.name.cmp(&b.1.name));
         results
     }
 
@@ -100,7 +101,8 @@ impl FunctionRegistry {
 
     /// Get a list of all FunctionIds registered in the registry.
     pub fn get_function_ids(&self) -> Vec<FunctionId> {
-        self.functions
+        let mut functions = self
+            .functions
             .iter()
             .flat_map(|(package, funcs)| {
                 funcs.iter().map(move |f| FunctionId {
@@ -108,7 +110,10 @@ impl FunctionRegistry {
                     function_name: f.routine_name.clone(),
                 })
             })
-            .collect()
+            .collect::<Vec<_>>();
+
+        functions.sort_by(|a, b| a.package_name.cmp(&b.package_name));
+        functions
     }
 
     /// Get function metadata by its FunctionId.
