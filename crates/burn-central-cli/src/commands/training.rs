@@ -51,7 +51,7 @@ pub struct TrainingArgs {
     #[clap(short = 'b', long = "backend")]
     backend: Option<BackendType>,
     /// A JSON file containing argument overrides for the training function
-    #[clap(short = 'a', long = "args")]
+    #[clap(long = "args")]
     args: Option<String>,
     /// Batch override: e.g. --overrides a.b=3 x.y.z=true
     #[clap(long = "overrides", value_parser = parse_key_val, value_hint = ValueHint::Other, value_delimiter = ' ', num_args = 1..)]
