@@ -150,7 +150,7 @@ fn execute_remotely(
     let launch_args = ExperimentConfig::load_config(args.args, args.overrides)?;
 
     let command = TrainingJobArgs {
-        package: function.package_name.clone(),
+        package: Some(function.package_name.clone()),
         function: function.function_name.clone(),
         backend: args.backend.unwrap_or_default(),
         args: Some(launch_args.data),
