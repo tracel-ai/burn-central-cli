@@ -41,7 +41,7 @@ pub fn get_client_and_login_if_needed(context: &mut CliContext) -> anyhow::Resul
                             Environment::Production => "",
                         };
                         context.terminal().print_err(&format!(
-                            "Failed to login{}. Please try again. Press Ctrl+C to exit.",
+                            "Failed to login{}. Please try again. Press Esc or Ctrl+C to exit.",
                             env_msg
                         ));
 

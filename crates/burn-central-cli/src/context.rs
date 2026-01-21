@@ -66,7 +66,7 @@ impl CliContext {
         let client = Client::new(self.environment.clone(), &creds);
 
         client.map_err(|e| {
-            if e.is_login_error() {
+            if e.is_login_error() || e.to_string().contains("422") {
                 ClientCreationError::InvalidCredentials
             } else {
                 ClientCreationError::ServerConnectionError(e.to_string())
