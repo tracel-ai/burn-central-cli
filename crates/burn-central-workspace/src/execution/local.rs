@@ -414,6 +414,9 @@ impl<'a> LocalExecutor<'a> {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
+        let target_dir = self.project.burn_dir().target_dir();
+        build_cmd.arg("--target-dir");
+        build_cmd.arg(target_dir);
         build_cmd.arg("--message-format=json");
         build_cmd.arg(config.build_profile.as_cargo_arg());
         build_cmd.env("BURN_CENTRAL_CODE_VERSION", &config.code_version);

@@ -38,6 +38,8 @@ pub enum Commands {
     Me,
     /// Display current project information.
     Project,
+    /// Clean up local artifacts in the project. (This will not clear your target folder.)
+    Clean,
 }
 
 pub fn cli_main() {
@@ -79,5 +81,6 @@ fn handle_command(command: Commands, context: CliContext) -> anyhow::Result<()> 
         Commands::Unlink => commands::unlink::handle_command(context),
         Commands::Me => commands::me::handle_command(context),
         Commands::Project => commands::project::handle_command(context),
+        Commands::Clean => commands::clean::handle_command(context),
     }
 }
