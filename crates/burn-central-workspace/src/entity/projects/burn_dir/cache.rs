@@ -85,4 +85,9 @@ impl CacheState {
     pub fn remove_binary(&mut self, name: &str) -> Option<BinaryEntry> {
         self.binaries.remove(name)
     }
+
+    pub fn clear(&mut self) {
+        self.crates.clear();
+        self.binaries.clear();
+    }
 }

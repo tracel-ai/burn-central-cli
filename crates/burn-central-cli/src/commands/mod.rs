@@ -3,6 +3,7 @@ use crate::commands::training::TrainingArgs;
 use crate::helpers::{is_burn_central_project_linked, require_cargo_workspace};
 use crate::{commands::login::get_client_and_login_if_needed, context::CliContext};
 
+pub mod clean;
 pub mod init;
 pub mod login;
 pub mod me;
