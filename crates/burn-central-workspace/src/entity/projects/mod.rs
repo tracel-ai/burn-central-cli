@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use cargo_metadata::TargetKind;
+
 use crate::entity::projects::burn_dir::{BurnDir, project::BurnCentralProject};
 use crate::event::Reporter;
 use crate::execution::cancellable::CancellationToken;
@@ -300,6 +302,11 @@ impl ProjectContext {
 
             let pkgids = workspace_packages
                 .iter()
+                .filter(|pkg| {
+                    pkg.targets
+                        .iter()
+                        .any(|t| t.kind.iter().any(|k| matches!(k, TargetKind::Lib)))
+                })
                 .map(|pkg| PkgId {
                     name: pkg.name.to_string(),
                     version: Some(pkg.version.to_string()),
