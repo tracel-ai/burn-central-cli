@@ -18,7 +18,7 @@ impl BurnDir {
 
     pub fn init(&self) -> std::io::Result<()> {
         fs::create_dir_all(&self.root)?;
-        fs::write(self.root.join(".gitignore"), "*\n")?;
+        fs::write(self.root.join(".gitignore"), "*\n!project.toml")?;
         Ok(())
     }
 
