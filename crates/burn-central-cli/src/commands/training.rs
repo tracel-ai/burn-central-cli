@@ -4,6 +4,7 @@ use burn_central_workspace::compute_provider::TrainingJobArgs;
 use burn_central_workspace::execution::BackendType;
 use burn_central_workspace::execution::ExecutionError;
 use burn_central_workspace::execution::ProcedureType;
+use burn_central_workspace::execution::cancellable::CancellationToken;
 use burn_central_workspace::execution::local::ExecutionEvent;
 use burn_central_workspace::execution::local::ExecutionEventReporter;
 use burn_central_workspace::execution::local::LocalExecutionConfig;
@@ -14,10 +15,11 @@ use clap::Parser;
 use clap::ValueHint;
 use cliclack::{MultiProgress, ProgressBar};
 use colored::Colorize;
-
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use ctrlc;
+use once_cell::sync::Lazy;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -27,6 +29,8 @@ use crate::tools::preload_functions;
 
 use crate::context::CliContext;
 use crate::tools::terminal::Terminal;
+
+static SIGNAL_COUNT: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
 
 /// Parse a key=value string into a key-value pair
 pub fn parse_key_val(s: &str) -> Result<(String, serde_json::Value), String> {
@@ -190,10 +194,15 @@ struct TrainingReporter {
     step_start_time: Mutex<Option<Instant>>,
     current_step: Mutex<Option<String>>,
     current_message: Mutex<String>,
+    experiment_num: Arc<Mutex<Option<i32>>>,
 }
 
 impl TrainingReporter {
-    pub fn new(function: &FunctionId, terminal: Terminal) -> Self {
+    pub fn new(
+        function: &FunctionId,
+        terminal: Terminal,
+        experiment_num: Arc<Mutex<Option<i32>>>,
+    ) -> Self {
         let multi_progress = terminal.multiprogress(&format!(
             "Executing training function `{}`",
             function.to_string().bold()
@@ -206,6 +215,7 @@ impl TrainingReporter {
             step_start_time: Mutex::new(None),
             current_step: Mutex::new(None),
             current_message: Mutex::new("Processing...".to_string()),
+            experiment_num,
         }
     }
 
@@ -283,6 +293,12 @@ impl ExecutionEventReporter for TrainingReporter {
     fn report_event(&self, event: ExecutionEvent) {
         let message = event.message.unwrap_or_else(|| "Processing...".to_string());
 
+        if message.starts_with("Experiment num: ") {
+            if let Ok(num) = message["Experiment num: ".len()..].trim().parse::<i32>() {
+                *self.experiment_num.lock().unwrap() = Some(num);
+            }
+        }
+
         let mut current_step = self.current_step.lock().unwrap();
         let mut step_start_time = self.step_start_time.lock().unwrap();
 
@@ -346,11 +362,39 @@ fn execute_locally(
     )
     .with_args(args_json.data);
 
-    let reporter = Arc::new(TrainingReporter::new(&function, context.terminal().clone()));
+    let experiment_num = Arc::new(Mutex::new(None));
+    let reporter = Arc::new(TrainingReporter::new(
+        &function,
+        context.terminal().clone(),
+        experiment_num.clone(),
+    ));
     reporter.start(format!(
         "Running training function `{}`...",
         function.to_string().bold()
     ));
+
+    let cancel_token = CancellationToken::new();
+
+    let cancel_token_clone = cancel_token.clone();
+    let client_clone = context.create_client().ok();
+    let experiment_num_clone = experiment_num.clone();
+    let project_clone = project.get_project().clone();
+
+    ctrlc::set_handler(move || {
+        let count = SIGNAL_COUNT.fetch_add(1, Ordering::SeqCst);
+        let num = *experiment_num_clone.lock().unwrap();
+        if count == 0 {
+            if let Some(num) = num {
+                if let Some(client) = &client_clone {
+                    let _ =
+                        client.cancel_experiment(&project_clone.owner, &project_clone.name, num);
+                }
+            }
+        } else {
+            cancel_token_clone.cancel();
+        }
+    })
+    .expect("Error setting Ctrl-C handler");
 
     let timer_cancel = Arc::new(AtomicBool::new(true));
     let timer_handle = thread::spawn({
@@ -366,7 +410,7 @@ fn execute_locally(
         }
     });
 
-    let result = executor.execute(config, Some(reporter.clone()));
+    let result = executor.execute_cancellable(config, &cancel_token, Some(reporter.clone()));
 
     timer_cancel.store(false, Ordering::Relaxed);
     let _ = timer_handle.join();
