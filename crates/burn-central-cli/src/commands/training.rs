@@ -16,7 +16,6 @@ use clap::ValueHint;
 use cliclack::{MultiProgress, ProgressBar};
 use colored::Colorize;
 use ctrlc;
-use once_cell::sync::Lazy;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -29,8 +28,6 @@ use crate::tools::preload_functions;
 
 use crate::context::CliContext;
 use crate::tools::terminal::Terminal;
-
-static SIGNAL_COUNT: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
 
 /// Parse a key=value string into a key-value pair
 pub fn parse_key_val(s: &str) -> Result<(String, serde_json::Value), String> {
@@ -224,6 +221,10 @@ impl TrainingReporter {
             .println(format!("  {}", message.dimmed()));
     }
 
+    pub fn push_info(&self, note: String) {
+        self.multi_progress.println(format!("  {}", note));
+    }
+
     pub fn update_spinner_display(&self) {
         let current_step = self.current_step.lock().unwrap();
         let current_message = self.current_message.lock().unwrap();
@@ -293,9 +294,9 @@ impl ExecutionEventReporter for TrainingReporter {
     fn report_event(&self, event: ExecutionEvent) {
         let message = event.message.unwrap_or_else(|| "Processing...".to_string());
 
-        if message.starts_with("Experiment num: ") {
-            if let Ok(num) = message["Experiment num: ".len()..].trim().parse::<i32>() {
-                *self.experiment_num.lock().unwrap() = Some(num);
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&message) {
+            if let Some(num) = json.get("experiment_num").and_then(|v| v.as_i64()) {
+                *self.experiment_num.lock().unwrap() = Some(num as i32);
             }
         }
 
@@ -380,17 +381,28 @@ fn execute_locally(
     let experiment_num_clone = experiment_num.clone();
     let project_clone = project.get_project().clone();
 
+    let signal_count = Arc::new(AtomicUsize::new(0));
+
+    let reporter_clone = Arc::downgrade(&reporter);
     ctrlc::set_handler(move || {
-        let count = SIGNAL_COUNT.fetch_add(1, Ordering::SeqCst);
+        let count = signal_count.fetch_add(1, Ordering::SeqCst);
         let num = *experiment_num_clone.lock().unwrap();
-        if count == 0 {
-            if let Some(num) = num {
-                if let Some(client) = &client_clone {
-                    let _ =
-                        client.cancel_experiment(&project_clone.owner, &project_clone.name, num);
-                }
+        if let Some(num) = num
+            && count == 0
+        {
+            reporter_clone.upgrade().map(|r| {
+                r.push_info(format!(
+                    "{}",
+                    "Cancellation requested. Press Ctrl-C again to force quit.".yellow()
+                ))
+            });
+            if let Some(client) = &client_clone {
+                let _ = client.cancel_experiment(&project_clone.owner, &project_clone.name, num);
             }
         } else {
+            reporter_clone
+                .upgrade()
+                .map(|r| r.push_info(format!("{}", "Force quitting...".yellow())));
             cancel_token_clone.cancel();
         }
     })

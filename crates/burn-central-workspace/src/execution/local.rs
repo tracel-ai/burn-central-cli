@@ -17,7 +17,7 @@ use crate::{
     },
 };
 use std::{
-    io::{BufRead, BufReader, stdin},
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::Arc,
@@ -419,7 +419,7 @@ impl<'a> LocalExecutor<'a> {
         build_cmd.arg("--target-dir");
         build_cmd.arg(target_dir);
         build_cmd.arg("--message-format=json");
-        // build_cmd.arg("--quiet");
+        build_cmd.arg("--quiet");
         build_cmd.arg(config.build_profile.as_cargo_arg());
         build_cmd.env("BURN_CENTRAL_CODE_VERSION", &config.code_version);
         build_cmd.args([
