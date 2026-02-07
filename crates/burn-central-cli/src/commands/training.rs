@@ -390,16 +390,19 @@ fn execute_locally(
         if let Some(num) = num
             && count == 0
         {
-            if let Some(r) = reporter_clone.upgrade() { r.push_info(format!(
+            if let Some(r) = reporter_clone.upgrade() {
+                r.push_info(format!(
                     "{}",
                     "Cancellation requested. Press Ctrl-C again to force quit.".yellow()
-                )) }
+                ))
+            }
             if let Some(client) = &client_clone {
                 let _ = client.cancel_experiment(&project_clone.owner, &project_clone.name, num);
             }
         } else {
-            if let Some(r) = reporter_clone
-                .upgrade() { r.push_info(format!("{}", "Force quitting...".yellow())) }
+            if let Some(r) = reporter_clone.upgrade() {
+                r.push_info(format!("{}", "Force quitting...".yellow()))
+            }
             cancel_token_clone.cancel();
         }
     })
