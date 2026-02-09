@@ -239,6 +239,7 @@ fn generate_main_rs(
         #backend_types
 
         use #crate_name_str::*;
+        use ctrlc;
 
         fn main() -> Result<(), String> {
             use burn_central::runtime::Executor;
@@ -258,6 +259,7 @@ fn generate_main_rs(
                 .build()
                 .map_err(|e| e.to_string())?;
 
+            ctrlc::set_handler(|| {}).expect("Error setting Ctrl-C handler");
 
             let mut #builder_ident = Executor::<MyAutodiffBackend>::builder();
             #(#builder_registration)*
@@ -308,6 +310,12 @@ pub fn create_crate(
     generated_crate.add_dependency(Dependency::new(
         "serde_json".to_string(),
         "*".to_string(),
+        None,
+        vec![],
+    ));
+    generated_crate.add_dependency(Dependency::new(
+        "ctrlc".to_string(),
+        "3.5".to_string(),
         None,
         vec![],
     ));

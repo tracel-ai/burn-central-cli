@@ -182,6 +182,7 @@ impl FunctionDiscovery {
         let mut child = cmd
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .stdin(Stdio::null())
             .spawn()
             .map_err(|e| DiscoveryError::SpawnFailed(e.to_string()))?;
 

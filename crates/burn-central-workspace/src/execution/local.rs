@@ -412,12 +412,14 @@ impl<'a> LocalExecutor<'a> {
             .current_dir(build_dir)
             .arg("build")
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .stdin(Stdio::null());
 
         let target_dir = self.project.burn_dir().target_dir();
         build_cmd.arg("--target-dir");
         build_cmd.arg(target_dir);
         build_cmd.arg("--message-format=json");
+        build_cmd.arg("--quiet");
         build_cmd.arg(config.build_profile.as_cargo_arg());
         build_cmd.env("BURN_CENTRAL_CODE_VERSION", &config.code_version);
         build_cmd.args([
@@ -453,6 +455,7 @@ impl<'a> LocalExecutor<'a> {
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
             let reporter_clone = event_reporter.clone();
+            let build_errors_tx = build_errors_tx.clone();
 
             std::thread::spawn(move || {
                 let stream = cargo_metadata::Message::parse_stream(reader);
@@ -487,6 +490,16 @@ impl<'a> LocalExecutor<'a> {
                         }
                         _ => {}
                     }
+                }
+            });
+        }
+
+        // Capture stderr
+        if let Some(stderr) = child.stderr.take() {
+            let reader = BufReader::new(stderr);
+            std::thread::spawn(move || {
+                for line in reader.lines().map_while(Result::ok) {
+                    let _ = build_errors_tx.send(line);
                 }
             });
         }
@@ -628,7 +641,7 @@ impl<'a> LocalExecutor<'a> {
         run_cmd
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .stdin(Stdio::piped());
+            .stdin(Stdio::null());
 
         if let Some(ref reporter) = event_reporter {
             reporter.report_event(ExecutionEvent {

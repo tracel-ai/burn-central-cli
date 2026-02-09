@@ -84,7 +84,8 @@ impl<'a> CargoChecker<'a> {
             .arg("check")
             .arg("--message-format=json")
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .stdin(Stdio::null());
 
         if config.bootstrap {
             check_cmd.env("RUSTC_BOOTSTRAP", "1");

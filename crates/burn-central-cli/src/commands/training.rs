@@ -4,6 +4,7 @@ use burn_central_workspace::compute_provider::TrainingJobArgs;
 use burn_central_workspace::execution::BackendType;
 use burn_central_workspace::execution::ExecutionError;
 use burn_central_workspace::execution::ProcedureType;
+use burn_central_workspace::execution::cancellable::CancellationToken;
 use burn_central_workspace::execution::local::ExecutionEvent;
 use burn_central_workspace::execution::local::ExecutionEventReporter;
 use burn_central_workspace::execution::local::LocalExecutionConfig;
@@ -14,10 +15,10 @@ use clap::Parser;
 use clap::ValueHint;
 use cliclack::{MultiProgress, ProgressBar};
 use colored::Colorize;
-
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use ctrlc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -190,10 +191,15 @@ struct TrainingReporter {
     step_start_time: Mutex<Option<Instant>>,
     current_step: Mutex<Option<String>>,
     current_message: Mutex<String>,
+    experiment_num: Arc<Mutex<Option<i32>>>,
 }
 
 impl TrainingReporter {
-    pub fn new(function: &FunctionId, terminal: Terminal) -> Self {
+    pub fn new(
+        function: &FunctionId,
+        terminal: Terminal,
+        experiment_num: Arc<Mutex<Option<i32>>>,
+    ) -> Self {
         let multi_progress = terminal.multiprogress(&format!(
             "Executing training function `{}`",
             function.to_string().bold()
@@ -206,12 +212,17 @@ impl TrainingReporter {
             step_start_time: Mutex::new(None),
             current_step: Mutex::new(None),
             current_message: Mutex::new("Processing...".to_string()),
+            experiment_num,
         }
     }
 
     fn add_to_history(&self, message: String) {
         self.multi_progress
             .println(format!("  {}", message.dimmed()));
+    }
+
+    pub fn push_info(&self, note: String) {
+        self.multi_progress.println(format!("  {}", note));
     }
 
     pub fn update_spinner_display(&self) {
@@ -283,6 +294,12 @@ impl ExecutionEventReporter for TrainingReporter {
     fn report_event(&self, event: ExecutionEvent) {
         let message = event.message.unwrap_or_else(|| "Processing...".to_string());
 
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&message) {
+            if let Some(num) = json.get("experiment_num").and_then(|v| v.as_i64()) {
+                *self.experiment_num.lock().unwrap() = Some(num as i32);
+            }
+        }
+
         let mut current_step = self.current_step.lock().unwrap();
         let mut step_start_time = self.step_start_time.lock().unwrap();
 
@@ -346,11 +363,50 @@ fn execute_locally(
     )
     .with_args(args_json.data);
 
-    let reporter = Arc::new(TrainingReporter::new(&function, context.terminal().clone()));
+    let experiment_num = Arc::new(Mutex::new(None));
+    let reporter = Arc::new(TrainingReporter::new(
+        &function,
+        context.terminal().clone(),
+        experiment_num.clone(),
+    ));
     reporter.start(format!(
         "Running training function `{}`...",
         function.to_string().bold()
     ));
+
+    let cancel_token = CancellationToken::new();
+
+    let cancel_token_clone = cancel_token.clone();
+    let client_clone = context.create_client().ok();
+    let experiment_num_clone = experiment_num.clone();
+    let project_clone = project.get_project().clone();
+
+    let signal_count = Arc::new(AtomicUsize::new(0));
+
+    let reporter_clone = Arc::downgrade(&reporter);
+    ctrlc::set_handler(move || {
+        let count = signal_count.fetch_add(1, Ordering::SeqCst);
+        let num = *experiment_num_clone.lock().unwrap();
+        if let Some(num) = num
+            && count == 0
+        {
+            if let Some(r) = reporter_clone.upgrade() {
+                r.push_info(format!(
+                    "{}",
+                    "Cancellation requested. Press Ctrl-C again to force quit.".yellow()
+                ))
+            }
+            if let Some(client) = &client_clone {
+                let _ = client.cancel_experiment(&project_clone.owner, &project_clone.name, num);
+            }
+        } else {
+            if let Some(r) = reporter_clone.upgrade() {
+                r.push_info(format!("{}", "Force quitting...".yellow()))
+            }
+            cancel_token_clone.cancel();
+        }
+    })
+    .expect("Error setting Ctrl-C handler");
 
     let timer_cancel = Arc::new(AtomicBool::new(true));
     let timer_handle = thread::spawn({
@@ -366,7 +422,7 @@ fn execute_locally(
         }
     });
 
-    let result = executor.execute(config, Some(reporter.clone()));
+    let result = executor.execute_cancellable(config, &cancel_token, Some(reporter.clone()));
 
     timer_cancel.store(false, Ordering::Relaxed);
     let _ = timer_handle.join();
