@@ -354,7 +354,8 @@ fn execute_locally(
             .get_api_key()
             .context("No API key available")?
             .to_string(),
-        context.get_api_endpoint().to_string(),
+        serde_json::to_string(&context.environment())
+            .expect("Should be able to serialize environment"),
         Some(function.package_name.clone()),
         function.function_name.clone(),
         backend,
