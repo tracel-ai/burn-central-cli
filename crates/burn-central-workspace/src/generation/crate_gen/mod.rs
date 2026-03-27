@@ -288,7 +288,7 @@ pub fn create_crate(
 ) -> GeneratedCrate {
     // Create the generated crate package
     let mut generated_crate = GeneratedCrate::new(crate_name.to_string());
-    generated_crate.set_package_edition("2021".to_string());
+    generated_crate.set_package_edition(current_pkg.edition.to_string());
     generated_crate.set_package_version("0.0.0".to_string());
 
     // Add dependencies
