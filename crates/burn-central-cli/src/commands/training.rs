@@ -125,13 +125,14 @@ fn execute_remotely(
 
     validate_project_exists_on_server(context, project_ctx, &client)?;
 
-    let discovery = preload_functions(context, project_ctx)?;
+    let training_discovery =
+        preload_functions(context, project_ctx)?.filter_by_type(ProcedureType::Training);
 
     let bc_project = project_ctx.get_project();
     let compute_provider = args
         .compute_provider
         .context("Compute provider should be provided")?;
-    let function = get_function_to_run(args.package, args.function, &discovery)?;
+    let function = get_function_to_run(args.package, args.function, &training_discovery)?;
 
     let code_version = match args.code_version {
         Some(version) => {
@@ -144,7 +145,7 @@ fn execute_remotely(
             context
                 .terminal()
                 .print("Packaging project to create a new code version...");
-            package_sequence(context, project_ctx, Some(&discovery), false)?.digest
+            package_sequence(context, project_ctx, Some(&training_discovery), false)?.digest
         }
     };
 
@@ -336,15 +337,16 @@ fn execute_locally(
 
     let args_json = ExperimentConfig::load_config(args.args, args.overrides)?;
 
-    let discovery = preload_functions(context, project)?;
+    let training_discovery =
+        preload_functions(context, project)?.filter_by_type(ProcedureType::Training);
 
-    let function = get_function_to_run(args.package, args.function, &discovery)
+    let function = get_function_to_run(args.package, args.function, &training_discovery)
         .inspect_err(|e| {
             context.terminal().print_err(&e.to_string());
         })
         .with_context(|| "Failed to determine the training function to run.")?;
 
-    let code_version = package_sequence(context, project, Some(&discovery), false)?;
+    let code_version = package_sequence(context, project, Some(&training_discovery), false)?;
 
     let executor = LocalExecutor::new(project);
     let backend = args.backend.unwrap_or_default();
@@ -502,7 +504,7 @@ fn get_function_to_run(
             }
 
             let error_msg = format!(
-                "Function `{}` not found in package `{}`.",
+                "Training function `{}` not found in package `{}`.",
                 function_name, package_name,
             );
             Err(anyhow::anyhow!(error_msg))
@@ -511,7 +513,7 @@ fn get_function_to_run(
             let packages_functions = discovery.find_packages_for_function_name(&function_name);
 
             if packages_functions.is_empty() {
-                let error_msg = format!("Function `{}` is not available.", function_name);
+                let error_msg = format!("Training function `{}` is not available.", function_name);
                 return Err(anyhow::anyhow!(error_msg));
             }
 
@@ -524,7 +526,7 @@ fn get_function_to_run(
             }
 
             let error_msg = format!(
-                "Function `{}` exists in multiple packages. Please specify the package using --package.",
+                "Training function `{}` exists in multiple packages. Please specify the package using --package.",
                 function_name,
             );
             Err(anyhow::anyhow!(error_msg))
@@ -534,8 +536,7 @@ fn get_function_to_run(
 
             if let Some(functions) = package_functions {
                 if functions.is_empty() {
-                    let error_msg =
-                        format!("Package `{}` has no registered functions", package_name);
+                    let error_msg = format!("Package `{}` has no training functions", package_name);
                     return Err(anyhow::anyhow!(error_msg));
                 }
 

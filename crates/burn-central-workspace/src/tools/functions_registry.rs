@@ -2,7 +2,7 @@ use std::{collections::HashMap, fmt::Display};
 
 use cargo_metadata::Package;
 
-use crate::tools::function_discovery::FunctionMetadata;
+use crate::{execution::ProcedureType, tools::function_discovery::FunctionMetadata};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FunctionId {
@@ -89,6 +89,30 @@ impl FunctionRegistry {
         self.functions.get(package)
     }
 
+    /// Return a new registry containing only functions matching the requested procedure type.
+    pub fn filter_by_type(&self, procedure_type: ProcedureType) -> Self {
+        let expected_proc_type = procedure_type.to_string();
+        let functions = self
+            .functions
+            .iter()
+            .filter_map(|(package, functions)| {
+                let matching_functions = functions
+                    .iter()
+                    .filter(|function| function.proc_type == expected_proc_type)
+                    .cloned()
+                    .collect::<Vec<_>>();
+
+                if matching_functions.is_empty() {
+                    None
+                } else {
+                    Some((package.clone(), matching_functions))
+                }
+            })
+            .collect();
+
+        Self { functions }
+    }
+
     /// Check if the registry is empty, meaning no functions have been registered by any package.
     pub fn is_empty(&self) -> bool {
         self.functions.is_empty()
@@ -153,5 +177,56 @@ impl FunctionRegistry {
             .values()
             .flat_map(|funcs| funcs.iter().cloned())
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_package() -> Package {
+        cargo_metadata::MetadataCommand::new()
+            .manifest_path(format!("{}/Cargo.toml", env!("CARGO_MANIFEST_DIR")))
+            .no_deps()
+            .exec()
+            .unwrap()
+            .packages
+            .into_iter()
+            .find(|package| package.name.as_str() == env!("CARGO_PKG_NAME"))
+            .unwrap()
+    }
+
+    fn test_function(routine_name: &str, proc_type: &str) -> FunctionMetadata {
+        FunctionMetadata {
+            mod_path: "crate::module".to_string(),
+            fn_name: routine_name.to_string(),
+            builder_fn_name: format!("__{}_builder", routine_name),
+            routine_name: routine_name.to_string(),
+            proc_type: proc_type.to_string(),
+            token_stream: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn filter_by_procedure_type_keeps_only_matching_functions() {
+        let package = test_package();
+        let mut registry = FunctionRegistry::new();
+        registry
+            .get_or_create_package_entry(package.clone())
+            .extend([
+                test_function("train_model", "training"),
+                test_function("run_inference", "inference"),
+            ]);
+
+        let training_registry = registry.filter_by_type(ProcedureType::Training);
+
+        assert_eq!(training_registry.num_functions(), 1);
+        assert!(training_registry.has_function("train_model"));
+        assert!(!training_registry.has_function("run_inference"));
+
+        let package_functions = training_registry.get_package_functions(&package).unwrap();
+        assert_eq!(package_functions.len(), 1);
+        assert_eq!(package_functions[0].routine_name, "train_model");
+        assert_eq!(package_functions[0].proc_type, "training");
     }
 }

@@ -205,10 +205,14 @@ impl<'a> LocalExecutor<'a> {
     ) -> Result<LocalExecutionResult, ExecutionError> {
         // Discover functions in the workspace
         let discovery = self.discover_functions(cancel_token, event_reporter.as_ref())?;
+        let runnable_discovery = discovery.filter_by_type(config.procedure_type.clone());
 
         // Resolve which package contains the target function
-        let (target_package, target_package_functions) =
-            self.resolve_target_package(&discovery, config.package.as_deref(), &config.function)?;
+        let (target_package, target_package_functions) = self.resolve_target_package(
+            &runnable_discovery,
+            config.package.as_deref(),
+            &config.function,
+        )?;
 
         // Build configuration for compilation
         let build_config = BuildConfig {
