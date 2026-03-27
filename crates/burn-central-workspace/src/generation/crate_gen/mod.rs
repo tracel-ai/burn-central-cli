@@ -235,6 +235,7 @@ fn generate_main_rs(
     );
 
     let bin_content: proc_macro2::TokenStream = quote! {
+        #![allow(unused_imports)]
         #recursion_limit
         #backend_types
 
@@ -249,15 +250,11 @@ fn generate_main_rs(
             let device = #backend_default_device;
 
             let key = runtime_args.burn_central.api_key;
-            let endpoint = runtime_args.burn_central.endpoint;
+            let env = runtime_args.burn_central.env;
             let namespace = runtime_args.burn_central.namespace;
             let project = runtime_args.burn_central.project;
 
             let creds = burn_central::BurnCentralCredentials::new(key);
-            let client = burn_central::BurnCentral::builder(creds)
-                .with_endpoint(endpoint)
-                .build()
-                .map_err(|e| e.to_string())?;
 
             ctrlc::set_handler(|| {}).expect("Error setting Ctrl-C handler");
 
@@ -266,7 +263,7 @@ fn generate_main_rs(
             // #crate_entrypoint(&mut #builder_ident);
 
             #builder_ident
-                .build(client, namespace, project)
+                .build(creds, env, namespace, project)
                 .run(
                     runtime_args.kind.parse().unwrap(),
                     runtime_args.routine,
@@ -291,7 +288,7 @@ pub fn create_crate(
 ) -> GeneratedCrate {
     // Create the generated crate package
     let mut generated_crate = GeneratedCrate::new(crate_name.to_string());
-    generated_crate.set_package_edition("2021".to_string());
+    generated_crate.set_package_edition(current_pkg.edition.to_string());
     generated_crate.set_package_version("0.0.0".to_string());
 
     // Add dependencies

@@ -7,7 +7,7 @@ use strum::EnumString;
 use crate::tools::function_discovery::DiscoveryError;
 
 /// Types of procedures that can be executed
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProcedureType {
     Training,
@@ -40,7 +40,7 @@ impl BuildProfile {
     }
 }
 
-#[derive(Debug, Clone, EnumString, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, EnumString, Default, Deserialize, Serialize, PartialEq, Eq, Copy)]
 #[strum(serialize_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum BackendType {

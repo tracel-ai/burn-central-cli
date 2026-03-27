@@ -30,8 +30,8 @@ use crate::execution::cancellable::{CancellableProcess, CancellableResult};
 pub struct LocalExecutionConfig {
     /// The API key of the user in Burn Central
     pub api_key: String,
-    /// The API endpoint to use
-    pub api_endpoint: String,
+    /// The client env to use for execution (serialized burn_central_client::Env)
+    pub env: String,
     // TODO: in the future this should be not optional, but it is now
     // for backward compatibility with the frontend which does not provide it yet
     /// Optional package name (if not provided, will be resolved)
@@ -61,14 +61,14 @@ struct RunConfig {
     pub procedure_type: ProcedureType,
     pub args: serde_json::Value,
     pub api_key: String,
-    pub api_endpoint: String,
+    pub env: String,
 }
 
 impl LocalExecutionConfig {
     /// Create a new local execution config
     pub fn new(
         api_key: String,
-        api_endpoint: String,
+        env: String,
         package: Option<String>,
         function: String,
         backend: BackendType,
@@ -77,7 +77,7 @@ impl LocalExecutionConfig {
     ) -> Self {
         Self {
             api_key,
-            api_endpoint,
+            env,
             package,
             function,
             backend,
@@ -205,10 +205,14 @@ impl<'a> LocalExecutor<'a> {
     ) -> Result<LocalExecutionResult, ExecutionError> {
         // Discover functions in the workspace
         let discovery = self.discover_functions(cancel_token, event_reporter.as_ref())?;
+        let runnable_discovery = discovery.filter_by_type(config.procedure_type);
 
         // Resolve which package contains the target function
-        let (target_package, target_package_functions) =
-            self.resolve_target_package(&discovery, config.package.as_deref(), &config.function)?;
+        let (target_package, target_package_functions) = self.resolve_target_package(
+            &runnable_discovery,
+            config.package.as_deref(),
+            &config.function,
+        )?;
 
         // Build configuration for compilation
         let build_config = BuildConfig {
@@ -251,7 +255,7 @@ impl<'a> LocalExecutor<'a> {
             procedure_type: config.procedure_type,
             args: config.args,
             api_key: config.api_key,
-            api_endpoint: config.api_endpoint,
+            env: config.env,
         };
 
         self.run_executable(&executable_path, &run_config, cancel_token, event_reporter)
@@ -616,7 +620,7 @@ impl<'a> LocalExecutor<'a> {
         run_cmd.args(["--namespace", &project.owner]);
         run_cmd.args(["--project", &project.name]);
         run_cmd.args(["--api-key", &config.api_key]);
-        run_cmd.args(["--endpoint", &config.api_endpoint]);
+        run_cmd.args(["--env", &config.env]);
 
         let args_str = serde_json::to_string(&config.args).map_err(|e| {
             let error_msg = format!("Failed to serialize args: {}", e);
