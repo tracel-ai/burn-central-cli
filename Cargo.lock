@@ -209,11 +209,14 @@ dependencies = [
  "cliclack",
  "colored",
  "console 0.15.11",
+ "crossbeam-channel",
  "ctrlc",
  "directories",
+ "glob",
  "once_cell",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
  "url",
 ]
@@ -221,8 +224,6 @@ dependencies = [
 [[package]]
 name = "burn-central-client"
 version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7974af364a4b3f11674036bf46961fd9c7aba1720bf5ca65ab5c281540846e3"
 dependencies = [
  "reqwest",
  "serde",
@@ -636,6 +637,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "crossbeam-channel"
+version = "0.5.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2"
+dependencies = [
+ "crossbeam-utils",
 ]
 
 [[package]]
@@ -1936,6 +1946,12 @@ dependencies = [
  "gix-path",
  "gix-validate",
 ]
+
+[[package]]
+name = "glob"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
 name = "globset"

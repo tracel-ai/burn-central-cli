@@ -38,6 +38,8 @@ pub enum Commands {
     Me,
     /// Display current project information.
     Project,
+    /// Manage model lifecycle operations.
+    Model(commands::model::ModelArgs),
     /// Clean up local artifacts in the project. (This will not clear your target folder.)
     Clean,
 }
@@ -81,6 +83,7 @@ fn handle_command(command: Commands, context: CliContext) -> anyhow::Result<()> 
         Commands::Unlink => commands::unlink::handle_command(context),
         Commands::Me => commands::me::handle_command(context),
         Commands::Project => commands::project::handle_command(context),
+        Commands::Model(model_args) => commands::model::handle_command(model_args, context),
         Commands::Clean => commands::clean::handle_command(context),
     }
 }

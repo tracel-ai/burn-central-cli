@@ -7,6 +7,7 @@ pub mod clean;
 pub mod init;
 pub mod login;
 pub mod me;
+pub mod model;
 pub mod package;
 pub mod project;
 pub mod training;
