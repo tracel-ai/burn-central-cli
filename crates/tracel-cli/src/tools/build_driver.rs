@@ -111,6 +111,29 @@ pub fn install_hint(target: (Os, Arch)) -> &'static str {
     }
 }
 
+/// Preflight a glibc-pinned build. Pinning glibc requires `cargo zigbuild` (the only
+/// driver that honours the `.<version>` triple suffix), even when the target is the host
+/// or a same-OS cross-arch that would otherwise use plain `cargo build`. Bails with an
+/// install hint when zigbuild is unavailable.
+pub fn glibc_preflight(
+    terminal: &Terminal,
+    avail: &AvailableDrivers,
+    target: (Os, Arch),
+    glibc: &str,
+) -> anyhow::Result<()> {
+    let triple = target_triple(target.0, target.1);
+    if !avail.zigbuild {
+        anyhow::bail!(
+            "Pinning glibc {glibc} for {triple} requires cargo-zigbuild + Zig — {hint}.",
+            hint = install_hint(target)
+        );
+    }
+    terminal.print(&format!(
+        "Building {triple} against glibc {glibc} with `cargo zigbuild` (requires Zig)."
+    ));
+    Ok(())
+}
+
 /// Prepare to cross-build `target` with `driver`, returning the cross-linker the caller
 /// should inject into the build command (same-OS cargo builds only), or `None` when no
 /// per-build linker is needed. Also prints which driver/toolchain a cross-OS build relies on.
