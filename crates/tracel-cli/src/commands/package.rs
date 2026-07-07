@@ -7,8 +7,8 @@ use clap::Args;
 use sha2::{Digest, Sha256};
 use tracel_client::Client;
 use tracel_client::request::{
-    PublishArtifactRequest, PublishBinaryRequest, PublishProjectVersionRequest,
-    PublishSourceRequest,
+    CompleteCodeUploadRequest, CompletedCodeArtifact, CompletedCodePart, PublishArtifactRequest,
+    PublishBinaryRequest, PublishProjectVersionRequest, PublishSourceRequest,
 };
 
 use crate::commands::init::commit_sequence;
@@ -297,33 +297,62 @@ fn upload(
             )
         })?;
 
-    let Some(urls) = response.urls else {
+    // No uploads returned means this commit is already fully packaged.
+    if response.uploads.is_empty() {
         context.terminal().print_success(&format!(
             "This commit ({digest}) is already packaged (version {}).",
             response.id
         ));
         context.terminal().finalize("Nothing to upload.");
         return Ok(());
-    };
+    }
 
     let spinner = context.terminal().spinner();
     spinner.start("Uploading artifacts...");
+
+    // PUT each artifact, capture the S3 `ETag`, and report the exact `upload_id`
+    // + parts back so the server finalizes the uploads we actually wrote to
+    // (robust against server-side cache drift).
+    let mut artifacts = Vec::new();
     for (key, path) in prepared.uploads {
-        let url = urls.get(&key).ok_or_else(|| {
+        let descriptor = response.uploads.get(&key).ok_or_else(|| {
             spinner.error("Upload failed.");
             anyhow::anyhow!("Server did not return an upload URL for `{key}`")
         })?;
+        let part = descriptor.parts.first().ok_or_else(|| {
+            spinner.error("Upload failed.");
+            anyhow::anyhow!("Server returned no upload part for `{key}`")
+        })?;
         let bytes =
             std::fs::read(&path).with_context(|| format!("Failed to read {}", path.display()))?;
-        client.upload_bytes_to_url(url, bytes).map_err(|e| {
-            spinner.error("Upload failed.");
-            anyhow::anyhow!("Failed to upload `{key}`: {e}")
-        })?;
+        let etag = client
+            .upload_bytes_to_url(&part.url, bytes)
+            .map_err(|e| {
+                spinner.error("Upload failed.");
+                anyhow::anyhow!("Failed to upload `{key}`: {e}")
+            })?
+            .ok_or_else(|| {
+                spinner.error("Upload failed.");
+                anyhow::anyhow!("Upload of `{key}` did not return an ETag")
+            })?;
+        artifacts.push(CompletedCodeArtifact {
+            key,
+            upload_id: descriptor.id.clone(),
+            parts: vec![CompletedCodePart {
+                part_number: part.part as i32,
+                etag,
+            }],
+        });
     }
     spinner.stop("Artifacts uploaded.");
 
     client
-        .complete_project_version_upload(&bc_project.owner, &bc_project.name, &response.id)
+        .complete_project_version_upload(
+            &bc_project.owner,
+            &bc_project.name,
+            &response.id,
+            CompleteCodeUploadRequest { artifacts },
+        )
         .with_context(|| {
             format!(
                 "Failed to finalize upload for {}/{}",

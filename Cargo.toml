@@ -45,8 +45,10 @@ strum = {version = "0.27.2", features = ["derive"]}
 
 
 ## External Crate
-tracel-client = "0.8.1"
-# tracel-client  = { path = "../client/tracel-client" }
+# Use the local client while the multipart upload_id/ETag changes are unreleased.
+# Switch back to the published crate once a new tracel-client is cut.
+# tracel-client = "0.8.1"
+tracel-client = { path = "../client/tracel-client" }
 
 ## Crate
 tracel-cli = { version = "0.5.0", path = "crates/tracel-cli" }
