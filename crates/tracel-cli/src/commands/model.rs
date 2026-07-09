@@ -1,11 +1,11 @@
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-
-use anyhow::Context;
-use clap::{Args, Subcommand};
-
 use crate::context::CliContext;
 use crate::helpers::require_linked_project;
+use anyhow::Context;
+use clap::{Args, Subcommand};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 #[derive(Args, Debug)]
 pub struct ModelArgs {
@@ -112,6 +112,51 @@ fn collect_files(directory: &Path) -> anyhow::Result<BTreeMap<String, PathBuf>> 
     Ok(files)
 }
 
+struct FileMeta {
+    rel_path: String,
+    absolute_path: PathBuf,
+    size_bytes: u64,
+    checksum: String,
+}
+
+fn file_sha256_and_size(path: &Path) -> anyhow::Result<(String, u64)> {
+    let mut file = std::fs::File::open(path)
+        .with_context(|| format!("Failed to open file '{}'.", path.display()))?;
+
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 1024 * 1024];
+    let mut size = 0u64;
+
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .with_context(|| format!("Failed reading file '{}'.", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        size += read as u64;
+    }
+
+    Ok((format!("{:x}", hasher.finalize()), size))
+}
+
+fn build_file_specs(files: &BTreeMap<String, PathBuf>) -> anyhow::Result<Vec<FileMeta>> {
+    let mut specs = Vec::with_capacity(files.len());
+
+    for (rel_path, absolute_path) in files {
+        let (checksum, size_bytes) = file_sha256_and_size(absolute_path)?;
+        specs.push(FileMeta {
+            rel_path: rel_path.clone(),
+            absolute_path: absolute_path.clone(),
+            size_bytes,
+            checksum,
+        });
+    }
+
+    Ok(specs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,6 +203,27 @@ mod tests {
         let result = collect_files(&dir);
 
         assert!(result.is_err());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn given_known_content_when_build_file_specs_then_computes_correct_sha256_and_size() {
+        let dir = make_temp_dir("build-file-specs");
+        fs::write(dir.join("hello.txt"), b"hello world").unwrap();
+
+        let mut files = BTreeMap::new();
+        files.insert("hello.txt".to_string(), dir.join("hello.txt"));
+
+        let specs = build_file_specs(&files).unwrap();
+
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].rel_path, "hello.txt");
+        assert_eq!(specs[0].size_bytes, 11);
+        assert_eq!(
+            specs[0].checksum,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
+
         fs::remove_dir_all(&dir).unwrap();
     }
 }
