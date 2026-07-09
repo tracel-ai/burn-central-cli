@@ -157,12 +157,109 @@ fn build_file_specs(files: &BTreeMap<String, PathBuf>) -> anyhow::Result<Vec<Fil
     Ok(specs)
 }
 
+fn ensure_model_exists(
+    context: &CliContext,
+    client: &tracel_client::Client,
+    namespace: &str,
+    project: &str,
+    model_name: &str,
+) -> anyhow::Result<()> {
+    match client.get_model(namespace, project, model_name) {
+        Ok(_) => return Ok(()),
+        Err(e) if e.is_not_found() => {}
+        Err(e) => anyhow::bail!("Failed to check model '{model_name}': {e}"),
+    }
+
+    let create = context.terminal().confirm(&format!(
+        "Model '{model_name}' does not exist in {namespace}/{project}. Create it now?"
+    ))?;
+
+    if !create {
+        anyhow::bail!("Model upload cancelled: model '{model_name}' does not exist.");
+    }
+
+    let description = cliclack::input("Enter model description (optional)")
+        .required(false)
+        .interact::<String>()
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    client.create_model(
+        namespace,
+        project,
+        tracel_client::request::CreateModelRequest {
+            name: model_name.to_string(),
+            description,
+        },
+    )?;
+
+    context.terminal().print_success(&format!(
+        "Created model '{model_name}' in {namespace}/{project}."
+    ));
+
+    Ok(())
+}
+
+#[derive(Clone, Debug)]
+struct PartUploadTask {
+    rel_path: String,
+    absolute_path: PathBuf,
+    part: u32,
+    url: String,
+    offset: u64,
+    size_bytes: u64,
+}
+
+fn build_part_tasks(
+    files: &BTreeMap<String, PathBuf>,
+    upload_files: &[tracel_client::response::PresignedModelFileUploadUrlsResponse],
+) -> anyhow::Result<Vec<PartUploadTask>> {
+    let mut tasks = Vec::new();
+
+    for upload_file in upload_files {
+        let absolute_path = files.get(&upload_file.rel_path).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Upload response referenced unknown file path '{}'.",
+                upload_file.rel_path
+            )
+        })?;
+
+        if upload_file.urls.parts.is_empty() {
+            anyhow::bail!(
+                "Upload response for '{}' does not contain any part.",
+                upload_file.rel_path
+            );
+        }
+        let mut parts = upload_file.urls.parts.clone();
+        parts.sort_by_key(|part| part.part);
+
+        let mut offset = 0u64;
+        for part in parts {
+            tasks.push(PartUploadTask {
+                rel_path: upload_file.rel_path.clone(),
+                absolute_path: absolute_path.clone(),
+                part: part.part,
+                url: part.url,
+                offset,
+                size_bytes: part.size_bytes,
+            });
+            offset += part.size_bytes;
+        }
+    }
+
+    Ok(tasks)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::app_config::Environment;
     use crate::tools::terminal::Terminal;
     use std::fs;
+    use tracel_client::response::{
+        MultipartUploadResponse, PresignedModelFileUploadUrlsResponse, PresignedUploadUrlResponse,
+    };
 
     fn make_temp_dir(name: &str) -> PathBuf {
         let dir =
@@ -225,5 +322,60 @@ mod tests {
         );
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn given_multi_part_file_when_build_part_tasks_then_computes_sequential_offsets() {
+        let mut files = BTreeMap::new();
+        files.insert("weights.bin".to_string(), PathBuf::from("/tmp/weights.bin"));
+        let upload_files = vec![PresignedModelFileUploadUrlsResponse {
+            rel_path: "weights.bin".to_string(),
+            urls: MultipartUploadResponse {
+                id: "upload-1".to_string(),
+                parts: vec![
+                    PresignedUploadUrlResponse {
+                        part: 2,
+                        url: "https://example.com/part2".to_string(),
+                        size_bytes: 100,
+                    },
+                    PresignedUploadUrlResponse {
+                        part: 1,
+                        url: "https://example.com/part1".to_string(),
+                        size_bytes: 200,
+                    },
+                ],
+            },
+        }];
+
+        let tasks = build_part_tasks(&files, &upload_files).unwrap();
+
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0].part, 1);
+        assert_eq!(tasks[0].offset, 0);
+        assert_eq!(tasks[0].size_bytes, 200);
+        assert_eq!(tasks[1].part, 2);
+        assert_eq!(tasks[1].offset, 200);
+        assert_eq!(tasks[1].size_bytes, 100);
+    }
+
+    #[test]
+    fn given_unknown_rel_path_when_build_part_tasks_then_returns_error() {
+        let files: BTreeMap<String, PathBuf> = BTreeMap::new();
+
+        let upload_files = vec![PresignedModelFileUploadUrlsResponse {
+            rel_path: "missing.bin".to_string(),
+            urls: MultipartUploadResponse {
+                id: "upload-1".to_string(),
+                parts: vec![PresignedUploadUrlResponse {
+                    part: 1,
+                    url: "https://example.com/part1".to_string(),
+                    size_bytes: 10,
+                }],
+            },
+        }];
+
+        let result = build_part_tasks(&files, &upload_files);
+
+        assert!(result.is_err());
     }
 }
