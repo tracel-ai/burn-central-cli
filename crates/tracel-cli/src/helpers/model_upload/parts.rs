@@ -12,7 +12,10 @@ pub struct PartUploadTask {
     pub size_bytes: u64,
 }
 
-fn validate_part_sequence(rel_path: &str, parts: &[PresignedUploadUrlResponse]) -> anyhow::Result<()> {
+fn validate_part_sequence(
+    rel_path: &str,
+    parts: &[PresignedUploadUrlResponse],
+) -> anyhow::Result<()> {
     for (index, part) in parts.iter().enumerate() {
         let expected = index as u32 + 1;
         if part.part != expected {

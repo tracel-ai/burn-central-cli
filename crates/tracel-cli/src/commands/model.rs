@@ -70,9 +70,8 @@ fn upload_model_version(args: UploadModelArgs, mut context: CliContext) -> anyho
 
     let spinner = context.terminal().spinner();
     spinner.start("Collecting files...");
-    let files = collect_files(&args.directory).map_err(|e| {
+    let files = collect_files(&args.directory).inspect_err(|_e| {
         spinner.error("Failed to collect files.");
-        e
     })?;
     spinner.stop(format!("Found {} file(s).", files.len()));
 
@@ -80,9 +79,8 @@ fn upload_model_version(args: UploadModelArgs, mut context: CliContext) -> anyho
 
     let spinner = context.terminal().spinner();
     spinner.start("Computing checksums...");
-    let file_specs = build_file_specs(&files).map_err(|e| {
+    let file_specs = build_file_specs(&files).inspect_err(|_e| {
         spinner.error("Failed to compute checksums.");
-        e
     })?;
     spinner.stop("Checksums computed.");
 

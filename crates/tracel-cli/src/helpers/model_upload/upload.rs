@@ -59,7 +59,7 @@ fn chunk_tasks(tasks: Vec<PartUploadTask>, worker_count: usize) -> Vec<Vec<PartU
 /// can poll progress without every worker touching the progress bar directly.
 fn upload_chunk(
     chunk: Vec<PartUploadTask>,
-    uploader: &(impl PartUploader + Sync),
+    uploader: &impl PartUploader,
     cancelled: &AtomicBool,
     completed: &AtomicU64,
 ) -> anyhow::Result<()> {
@@ -90,7 +90,7 @@ fn upload_chunk(
 }
 
 pub fn upload_parts(
-    uploader: &(impl PartUploader + Sync),
+    uploader: &impl PartUploader,
     tasks: Vec<PartUploadTask>,
 ) -> anyhow::Result<()> {
     let total_parts = tasks.len();
