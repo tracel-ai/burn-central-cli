@@ -1,11 +1,12 @@
-use crate::context::CliContext;
-use crate::helpers::require_linked_project;
-use anyhow::Context;
+use std::path::PathBuf;
+
 use clap::{Args, Subcommand};
-use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
-use std::io::Read;
-use std::path::{Path, PathBuf};
+
+use crate::context::CliContext;
+use crate::helpers::{
+    build_file_specs, build_part_tasks, collect_files, ensure_model_exists, require_linked_project,
+    upload_parts,
+};
 
 #[derive(Args, Debug)]
 pub struct ModelArgs {
@@ -25,10 +26,10 @@ pub struct UploadModelArgs {
     pub model_name: String,
     /// Local directory containing the files to upload.
     pub directory: PathBuf,
-    /// Burn Central namespace. Defaults to the linked project's namespace.
+    /// Tracel Console namespace. Defaults to the linked project's namespace.
     #[arg(long)]
     pub namespace: Option<String>,
-    /// Burn Central project name. Defaults to the linked project's name.
+    /// Tracel Console project name. Defaults to the linked project's name.
     #[arg(long)]
     pub project: Option<String>,
 }
@@ -60,195 +61,65 @@ fn resolve_target(
 fn upload_model_version(args: UploadModelArgs, mut context: CliContext) -> anyhow::Result<()> {
     context.terminal().command_title("Model upload");
 
+    let client = crate::commands::login::get_client_and_login_if_needed(&mut context)?;
     let (namespace, project) = resolve_target(&context, args.namespace, args.project)?;
-
-    context.terminal().print(&format!(
-        "Target resolved: {}/{} (model '{}', directory '{}')",
-        namespace,
-        project,
-        args.model_name,
-        args.directory.display()
-    ));
 
     context
         .terminal()
-        .finalize("Target resolved. (Upload logic not yet implemented.)");
+        .print(&format!("Uploading to {namespace}/{project}"));
 
-    Ok(())
-}
+    let spinner = context.terminal().spinner();
+    spinner.start("Collecting files...");
+    let files = collect_files(&args.directory).map_err(|e| {
+        spinner.error("Failed to collect files.");
+        e
+    })?;
+    spinner.stop(format!("Found {} file(s).", files.len()));
 
-fn collect_files(directory: &Path) -> anyhow::Result<BTreeMap<String, PathBuf>> {
-    let base_dir = std::fs::canonicalize(directory)
-        .with_context(|| format!("Failed to resolve directory '{}'.", directory.display()))?;
+    let spinner = context.terminal().spinner();
+    spinner.start("Computing checksums...");
+    let file_specs = build_file_specs(&files).map_err(|e| {
+        spinner.error("Failed to compute checksums.");
+        e
+    })?;
+    spinner.stop("Checksums computed.");
 
-    if !base_dir.is_dir() {
-        anyhow::bail!("'{}' is not a directory.", base_dir.display());
-    }
+    ensure_model_exists(&context, &client, &namespace, &project, &args.model_name)?;
 
-    let mut files = BTreeMap::new();
+    let spinner = context.terminal().spinner();
+    spinner.start("Requesting upload URLs...");
+    let upload_request = tracel_client::request::RequestModelVersionUploadRequest {
+        files: file_specs
+            .into_iter()
+            .map(|f| tracel_client::request::ModelFileSpecRequest {
+                rel_path: f.rel_path,
+                size_bytes: f.size_bytes,
+                checksum: f.checksum,
+            })
+            .collect(),
+    };
+    let upload = client
+        .request_model_version_upload(&namespace, &project, &args.model_name, upload_request)
+        .map_err(|e| {
+            spinner.error("Failed to request upload URLs.");
+            anyhow::anyhow!(e)
+        })?;
+    spinner.stop(format!("Allocated model version {}.", upload.version));
 
-    for entry in walkdir::WalkDir::new(&base_dir).follow_links(false) {
-        let entry =
-            entry.with_context(|| format!("Failed to walk directory '{}'.", base_dir.display()))?;
+    let tasks = build_part_tasks(&files, &upload.files)?;
+    upload_parts(&context, &client, tasks)?;
 
-        if !entry.file_type().is_file() {
-            continue;
-        }
-
-        let absolute = entry.path().to_path_buf();
-        let rel_path = absolute
-            .strip_prefix(&base_dir)
-            .expect("walked entry should be under base_dir")
-            .to_string_lossy()
-            .replace('\\', "/");
-
-        files.insert(rel_path, absolute);
-    }
-
-    if files.is_empty() {
-        anyhow::bail!("No files found in '{}'.", base_dir.display());
-    }
-
-    Ok(files)
-}
-
-struct FileMeta {
-    rel_path: String,
-    absolute_path: PathBuf,
-    size_bytes: u64,
-    checksum: String,
-}
-
-fn file_sha256_and_size(path: &Path) -> anyhow::Result<(String, u64)> {
-    let mut file = std::fs::File::open(path)
-        .with_context(|| format!("Failed to open file '{}'.", path.display()))?;
-
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 1024 * 1024];
-    let mut size = 0u64;
-
-    loop {
-        let read = file
-            .read(&mut buffer)
-            .with_context(|| format!("Failed reading file '{}'.", path.display()))?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-        size += read as u64;
-    }
-
-    Ok((format!("{:x}", hasher.finalize()), size))
-}
-
-fn build_file_specs(files: &BTreeMap<String, PathBuf>) -> anyhow::Result<Vec<FileMeta>> {
-    let mut specs = Vec::with_capacity(files.len());
-
-    for (rel_path, absolute_path) in files {
-        let (checksum, size_bytes) = file_sha256_and_size(absolute_path)?;
-        specs.push(FileMeta {
-            rel_path: rel_path.clone(),
-            absolute_path: absolute_path.clone(),
-            size_bytes,
-            checksum,
-        });
-    }
-
-    Ok(specs)
-}
-
-fn ensure_model_exists(
-    context: &CliContext,
-    client: &tracel_client::Client,
-    namespace: &str,
-    project: &str,
-    model_name: &str,
-) -> anyhow::Result<()> {
-    match client.get_model(namespace, project, model_name) {
-        Ok(_) => return Ok(()),
-        Err(e) if e.is_not_found() => {}
-        Err(e) => anyhow::bail!("Failed to check model '{model_name}': {e}"),
-    }
-
-    let create = context.terminal().confirm(&format!(
-        "Model '{model_name}' does not exist in {namespace}/{project}. Create it now?"
-    ))?;
-
-    if !create {
-        anyhow::bail!("Model upload cancelled: model '{model_name}' does not exist.");
-    }
-
-    let description = cliclack::input("Enter model description (optional)")
-        .required(false)
-        .interact::<String>()
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-
-    client.create_model(
-        namespace,
-        project,
-        tracel_client::request::CreateModelRequest {
-            name: model_name.to_string(),
-            description,
-        },
-    )?;
+    client.complete_model_version_upload(&namespace, &project, &args.model_name, upload.version)?;
 
     context.terminal().print_success(&format!(
-        "Created model '{model_name}' in {namespace}/{project}."
+        "Uploaded model '{}' version {} to {}/{}.",
+        args.model_name, upload.version, namespace, project
     ));
+    context
+        .terminal()
+        .finalize("Model version uploaded successfully.");
 
     Ok(())
-}
-
-#[derive(Clone, Debug)]
-struct PartUploadTask {
-    rel_path: String,
-    absolute_path: PathBuf,
-    part: u32,
-    url: String,
-    offset: u64,
-    size_bytes: u64,
-}
-
-fn build_part_tasks(
-    files: &BTreeMap<String, PathBuf>,
-    upload_files: &[tracel_client::response::PresignedModelFileUploadUrlsResponse],
-) -> anyhow::Result<Vec<PartUploadTask>> {
-    let mut tasks = Vec::new();
-
-    for upload_file in upload_files {
-        let absolute_path = files.get(&upload_file.rel_path).ok_or_else(|| {
-            anyhow::anyhow!(
-                "Upload response referenced unknown file path '{}'.",
-                upload_file.rel_path
-            )
-        })?;
-
-        if upload_file.urls.parts.is_empty() {
-            anyhow::bail!(
-                "Upload response for '{}' does not contain any part.",
-                upload_file.rel_path
-            );
-        }
-        let mut parts = upload_file.urls.parts.clone();
-        parts.sort_by_key(|part| part.part);
-
-        let mut offset = 0u64;
-        for part in parts {
-            tasks.push(PartUploadTask {
-                rel_path: upload_file.rel_path.clone(),
-                absolute_path: absolute_path.clone(),
-                part: part.part,
-                url: part.url,
-                offset,
-                size_bytes: part.size_bytes,
-            });
-            offset += part.size_bytes;
-        }
-    }
-
-    Ok(tasks)
 }
 
 #[cfg(test)]
@@ -256,18 +127,6 @@ mod tests {
     use super::*;
     use crate::app_config::Environment;
     use crate::tools::terminal::Terminal;
-    use std::fs;
-    use tracel_client::response::{
-        MultipartUploadResponse, PresignedModelFileUploadUrlsResponse, PresignedUploadUrlResponse,
-    };
-
-    fn make_temp_dir(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("tracel-cli-test-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(dir.join("nested")).unwrap();
-        dir
-    }
 
     #[test]
     fn given_both_namespace_and_project_when_resolve_target_then_returns_them_directly() {
@@ -276,106 +135,5 @@ mod tests {
         let result = resolve_target(&context, Some("acme".to_string()), Some("proj".to_string()));
 
         assert_eq!(result.unwrap(), ("acme".to_string(), "proj".to_string()));
-    }
-
-    #[test]
-    fn given_nested_directory_when_collect_files_then_returns_all_files_with_forward_slash_rel_paths()
-     {
-        let dir = make_temp_dir("collect-files");
-        fs::write(dir.join("a.txt"), b"a").unwrap();
-        fs::write(dir.join("nested").join("b.txt"), b"b").unwrap();
-
-        let files = collect_files(&dir).unwrap();
-
-        assert_eq!(files.len(), 2);
-        assert!(files.contains_key("a.txt"));
-        assert!(files.contains_key("nested/b.txt"));
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn given_empty_directory_when_collect_files_then_returns_error() {
-        let dir = make_temp_dir("collect-files-empty");
-
-        let result = collect_files(&dir);
-
-        assert!(result.is_err());
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn given_known_content_when_build_file_specs_then_computes_correct_sha256_and_size() {
-        let dir = make_temp_dir("build-file-specs");
-        fs::write(dir.join("hello.txt"), b"hello world").unwrap();
-
-        let mut files = BTreeMap::new();
-        files.insert("hello.txt".to_string(), dir.join("hello.txt"));
-
-        let specs = build_file_specs(&files).unwrap();
-
-        assert_eq!(specs.len(), 1);
-        assert_eq!(specs[0].rel_path, "hello.txt");
-        assert_eq!(specs[0].size_bytes, 11);
-        assert_eq!(
-            specs[0].checksum,
-            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
-        );
-
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn given_multi_part_file_when_build_part_tasks_then_computes_sequential_offsets() {
-        let mut files = BTreeMap::new();
-        files.insert("weights.bin".to_string(), PathBuf::from("/tmp/weights.bin"));
-        let upload_files = vec![PresignedModelFileUploadUrlsResponse {
-            rel_path: "weights.bin".to_string(),
-            urls: MultipartUploadResponse {
-                id: "upload-1".to_string(),
-                parts: vec![
-                    PresignedUploadUrlResponse {
-                        part: 2,
-                        url: "https://example.com/part2".to_string(),
-                        size_bytes: 100,
-                    },
-                    PresignedUploadUrlResponse {
-                        part: 1,
-                        url: "https://example.com/part1".to_string(),
-                        size_bytes: 200,
-                    },
-                ],
-            },
-        }];
-
-        let tasks = build_part_tasks(&files, &upload_files).unwrap();
-
-        assert_eq!(tasks.len(), 2);
-        assert_eq!(tasks[0].part, 1);
-        assert_eq!(tasks[0].offset, 0);
-        assert_eq!(tasks[0].size_bytes, 200);
-        assert_eq!(tasks[1].part, 2);
-        assert_eq!(tasks[1].offset, 200);
-        assert_eq!(tasks[1].size_bytes, 100);
-    }
-
-    #[test]
-    fn given_unknown_rel_path_when_build_part_tasks_then_returns_error() {
-        let files: BTreeMap<String, PathBuf> = BTreeMap::new();
-
-        let upload_files = vec![PresignedModelFileUploadUrlsResponse {
-            rel_path: "missing.bin".to_string(),
-            urls: MultipartUploadResponse {
-                id: "upload-1".to_string(),
-                parts: vec![PresignedUploadUrlResponse {
-                    part: 1,
-                    url: "https://example.com/part1".to_string(),
-                    size_bytes: 10,
-                }],
-            },
-        }];
-
-        let result = build_part_tasks(&files, &upload_files);
-
-        assert!(result.is_err());
     }
 }
