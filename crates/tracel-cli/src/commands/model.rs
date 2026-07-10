@@ -76,6 +76,8 @@ fn upload_model_version(args: UploadModelArgs, mut context: CliContext) -> anyho
     })?;
     spinner.stop(format!("Found {} file(s).", files.len()));
 
+    ensure_model_exists(&context, &client, &namespace, &project, &args.model_name)?;
+
     let spinner = context.terminal().spinner();
     spinner.start("Computing checksums...");
     let file_specs = build_file_specs(&files).map_err(|e| {
@@ -84,7 +86,10 @@ fn upload_model_version(args: UploadModelArgs, mut context: CliContext) -> anyho
     })?;
     spinner.stop("Checksums computed.");
 
-    ensure_model_exists(&context, &client, &namespace, &project, &args.model_name)?;
+    let file_sizes: std::collections::BTreeMap<String, u64> = file_specs
+        .iter()
+        .map(|f| (f.rel_path.clone(), f.size_bytes))
+        .collect();
 
     let spinner = context.terminal().spinner();
     spinner.start("Requesting upload URLs...");
@@ -106,8 +111,8 @@ fn upload_model_version(args: UploadModelArgs, mut context: CliContext) -> anyho
         })?;
     spinner.stop(format!("Allocated model version {}.", upload.version));
 
-    let tasks = build_part_tasks(&files, &upload.files)?;
-    upload_parts(&context, &client, tasks)?;
+    let tasks = build_part_tasks(&files, &file_sizes, &upload.files)?;
+    upload_parts(&client, tasks)?;
 
     client.complete_model_version_upload(&namespace, &project, &args.model_name, upload.version)?;
 
