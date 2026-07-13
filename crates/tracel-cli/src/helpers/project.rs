@@ -81,6 +81,26 @@ pub fn require_linked_project(context: &CliContext) -> anyhow::Result<ProjectCon
     }
 }
 
+/// Resolve a namespace/project pair, using explicit overrides where given and
+/// falling back to the linked project's namespace/name for whichever is omitted.
+pub fn resolve_namespace_project(
+    context: &CliContext,
+    namespace: Option<String>,
+    project: Option<String>,
+) -> anyhow::Result<(String, String)> {
+    if let (Some(ns), Some(proj)) = (&namespace, &project) {
+        return Ok((ns.clone(), proj.clone()));
+    }
+
+    let linked = require_linked_project(context)?;
+    let bc_project = linked.get_project();
+
+    Ok((
+        namespace.unwrap_or_else(|| bc_project.owner.clone()),
+        project.unwrap_or_else(|| bc_project.name.clone()),
+    ))
+}
+
 /// Require a Cargo workspace (with or without Tracel Console linkage)
 pub fn require_cargo_workspace(context: &CliContext) -> anyhow::Result<WorkspaceInfo> {
     let manifest_path = find_manifest()?;

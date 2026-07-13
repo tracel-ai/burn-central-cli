@@ -1,6 +1,7 @@
 pub mod build_driver;
 pub mod cargo;
 pub mod event;
+pub mod fs;
 pub mod git;
 pub mod linker;
 pub mod packager;

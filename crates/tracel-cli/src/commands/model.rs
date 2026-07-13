@@ -1,12 +1,13 @@
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
+use tracel_client::request::{ModelFileSpecRequest, RequestModelVersionUploadRequest};
 
 use crate::context::CliContext;
 use crate::helpers::{
-    build_file_specs, build_part_tasks, collect_files, ensure_model_exists, require_linked_project,
-    upload_parts,
+    build_part_tasks, ensure_model_exists, resolve_namespace_project, upload_parts,
 };
+use crate::tools::fs::{build_file_specs, collect_files};
 
 #[derive(Args, Debug)]
 pub struct ModelArgs {
@@ -25,13 +26,21 @@ pub struct UploadModelArgs {
     /// Name of the model to upload a version to.
     pub model_name: String,
     /// Local directory containing the files to upload.
+    #[arg(short, long)]
     pub directory: PathBuf,
     /// Tracel Console namespace. Defaults to the linked project's namespace.
-    #[arg(long)]
+    #[arg(long, short)]
     pub namespace: Option<String>,
     /// Tracel Console project name. Defaults to the linked project's name.
-    #[arg(long)]
+    #[arg(long, short)]
     pub project: Option<String>,
+    /// Automatically create the model if it doesn't exist yet (true/false).
+    /// If omitted, you'll be prompted interactively.
+    #[arg(long, short)]
+    pub auto_create: Option<bool>,
+    /// Description to use when auto-creating the model. Requires --auto-create true.
+    #[arg(long, requires = "auto_create")]
+    pub description: Option<String>,
 }
 
 pub(crate) fn handle_command(args: ModelArgs, context: CliContext) -> anyhow::Result<()> {
@@ -40,29 +49,15 @@ pub(crate) fn handle_command(args: ModelArgs, context: CliContext) -> anyhow::Re
     }
 }
 
-fn resolve_target(
-    context: &CliContext,
-    namespace: Option<String>,
-    project: Option<String>,
-) -> anyhow::Result<(String, String)> {
-    if let (Some(ns), Some(proj)) = (&namespace, &project) {
-        return Ok((ns.clone(), proj.clone()));
+fn upload_model_version(args: UploadModelArgs, mut context: CliContext) -> anyhow::Result<()> {
+    if args.description.is_some() && args.auto_create != Some(true) {
+        anyhow::bail!("--description can only be used together with --auto-create true.");
     }
 
-    let linked = require_linked_project(context)?;
-    let bc_project = linked.get_project();
-
-    Ok((
-        namespace.unwrap_or_else(|| bc_project.owner.clone()),
-        project.unwrap_or_else(|| bc_project.name.clone()),
-    ))
-}
-
-fn upload_model_version(args: UploadModelArgs, mut context: CliContext) -> anyhow::Result<()> {
     context.terminal().command_title("Model upload");
 
     let client = crate::commands::login::get_client_and_login_if_needed(&mut context)?;
-    let (namespace, project) = resolve_target(&context, args.namespace, args.project)?;
+    let (namespace, project) = resolve_namespace_project(&context, args.namespace, args.project)?;
 
     context
         .terminal()
@@ -75,7 +70,15 @@ fn upload_model_version(args: UploadModelArgs, mut context: CliContext) -> anyho
     })?;
     spinner.stop(format!("Found {} file(s).", files.len()));
 
-    ensure_model_exists(&context, &client, &namespace, &project, &args.model_name)?;
+    ensure_model_exists(
+        &context,
+        &client,
+        &namespace,
+        &project,
+        &args.model_name,
+        args.auto_create,
+        args.description.clone(),
+    )?;
 
     let spinner = context.terminal().spinner();
     spinner.start("Computing checksums...");
@@ -91,10 +94,10 @@ fn upload_model_version(args: UploadModelArgs, mut context: CliContext) -> anyho
 
     let spinner = context.terminal().spinner();
     spinner.start("Requesting upload URLs...");
-    let upload_request = tracel_client::request::RequestModelVersionUploadRequest {
+    let upload_request = RequestModelVersionUploadRequest {
         files: file_specs
             .into_iter()
-            .map(|f| tracel_client::request::ModelFileSpecRequest {
+            .map(|f| ModelFileSpecRequest {
                 rel_path: f.rel_path,
                 size_bytes: f.size_bytes,
                 checksum: f.checksum,
@@ -123,20 +126,4 @@ fn upload_model_version(args: UploadModelArgs, mut context: CliContext) -> anyho
         .finalize("Model version uploaded successfully.");
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::app_config::Environment;
-    use crate::tools::terminal::Terminal;
-
-    #[test]
-    fn given_both_namespace_and_project_when_resolve_target_then_returns_them_directly() {
-        let context = CliContext::new(Terminal::default(), Environment::Production);
-
-        let result = resolve_target(&context, Some("acme".to_string()), Some("proj".to_string()));
-
-        assert_eq!(result.unwrap(), ("acme".to_string(), "proj".to_string()));
-    }
 }
