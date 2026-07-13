@@ -155,7 +155,7 @@ pub fn validate_project_exists_on_server(
         Err(e) if e.is_not_found() => {
             context.terminal().print_err(&format!(
                 "Project {}/{} does not exist on Tracel Console.",
-                &bc_project.owner, &bc_project.name
+                bc_project.owner, bc_project.name
             ));
             context
                 .terminal()
@@ -165,8 +165,8 @@ pub fn validate_project_exists_on_server(
             );
             anyhow::bail!(
                 "Project {}/{} not found on Tracel Console",
-                &bc_project.owner,
-                &bc_project.name
+                bc_project.owner,
+                bc_project.name
             )
         }
         Err(e) => {

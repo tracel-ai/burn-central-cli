@@ -9,7 +9,7 @@ pub fn handle_command(mut context: CliContext) -> anyhow::Result<()> {
     if let Err(e) = client {
         context.terminal().cancel_finalize(&format!(
             "Failed to connect to the server: {}. Please run 'cargo run -- login' to authenticate.",
-            &e
+            e
         ));
         anyhow::bail!(e);
     }
