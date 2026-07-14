@@ -6,6 +6,7 @@ use crate::helpers::{is_tracel_project_linked, require_cargo_workspace};
 pub mod init;
 pub mod login;
 pub mod me;
+pub mod model;
 pub mod package;
 pub mod project;
 pub mod training;

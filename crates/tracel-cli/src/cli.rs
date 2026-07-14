@@ -38,6 +38,8 @@ pub enum Commands {
     Me,
     /// Display current project information.
     Project,
+    /// Upload local files as a model version in the model registry.
+    Model(commands::model::ModelArgs),
 }
 
 pub fn cli_main() {
@@ -79,5 +81,6 @@ fn handle_command(command: Commands, context: CliContext) -> anyhow::Result<()> 
         Commands::Unlink => commands::unlink::handle_command(context),
         Commands::Me => commands::me::handle_command(context),
         Commands::Project => commands::project::handle_command(context),
+        Commands::Model(model_args) => commands::model::handle_command(model_args, context),
     }
 }

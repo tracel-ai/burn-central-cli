@@ -40,7 +40,7 @@ pub fn handle_command(mut context: CliContext) -> anyhow::Result<()> {
         Err(e) if e.is_not_found() => {
             context.terminal().cancel_finalize(&format!(
                 "Project {}/{} not found on the server.",
-                &bc_project.owner, &bc_project.name
+                bc_project.owner, bc_project.name
             ));
         }
         Err(e) => {
