@@ -37,8 +37,7 @@ pub struct AppConfig {
 
 impl AppConfig {
     pub fn new(environment: Environment) -> Result<Self, ConfigError> {
-        let proj_dirs =
-            ProjectDirs::from("ai", "tracel", "console").ok_or(ConfigError::MissingDirectory)?;
+        let proj_dirs = ProjectDirs::from("", "", "tracel").ok_or(ConfigError::MissingDirectory)?;
 
         let config_dir = proj_dirs.config_dir().to_path_buf();
         fs::create_dir_all(&config_dir)?; // Ensure it exists
